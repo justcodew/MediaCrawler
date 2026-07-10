@@ -176,6 +176,27 @@ ACCOUNTS_IMPORT_FILE = ""         # 启动时从该 CSV/Excel 导入账号(可�
 # 抖音/微博/快手 仍需浏览器,不适用本模式。
 ENABLE_HEADLESS_API = False
 
+# ==================== 反检测 (Anti-Detect) 配置 ====================
+# 降低被平台识别为机器人的风险。详见 anti_detect/README.md
+# 重要:这些措施只能降低风险,不能保证零风险。请用小号 + 控制规模 + 遵守平台规则。
+# 是否启用反检测(总开关)。关闭后下面所有子项失效,crawler 恢复原行为。
+ENABLE_ANTI_DETECT = False
+# 行为拟人化:固定 sleep 改为 sleep(base + random(0, jitter))
+HUMANIZE_SLEEP_JITTER = 3      # 随机抖动秒数(加在 CRAWLER_MAX_SLEEP_SEC 上)
+HUMANIZE_PAGE_STAY_SEC = 3     # 进入页面后停留秒数(模拟阅读)
+HUMANIZE_SCROLL_TIMES = 3      # 页面滚动次数(模拟浏览)
+# 截图风控感知:每页请求后截图 → LLM 多模态识别风控页面
+ANTI_DETECT_SCREENSHOT = True  # 是否截图给 LLM 判定
+ANTI_DETECT_SCREENSHOT_DIR = "data/risk_screenshots"  # 截图保存目录
+# 风控响应:检测到风控时的处理策略(stop=停止 | backoff=退避重试)
+ANTI_DETECT_ON_RISK = "stop"
+# 智能退避:连续风控时的退避参数
+ANTI_DETECT_BACKOFF_BASE = 60    # 首次退避秒数
+ANTI_DETECT_BACKOFF_MAX = 1800   # 最大退避秒数(30分钟)
+ANTI_DETECT_RISK_LIMIT = 3       # 连续风控达此数 → 停止该账号
+# 滑块自动通过:复用 tools/slider_util.py 的 opencv 识别
+ANTI_DETECT_AUTO_SLIDER = False  # 是否自动尝试过滑块(成功率有限,谨慎开启)
+
 from .bilibili_config import *
 from .xhs_config import *
 from .dy_config import *

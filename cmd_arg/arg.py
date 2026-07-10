@@ -384,6 +384,15 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 show_default=True,
             ),
         ] = str(getattr(config, "ENABLE_HEADLESS_API", False)),
+        enable_anti_detect: Annotated[
+            str,
+            typer.Option(
+                "--enable_anti_detect",
+                help="Enable anti-detect (screenshot risk sensing + humanized behavior)",
+                rich_help_panel="Advanced Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_ANTI_DETECT", False)),
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -395,6 +404,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         enable_resume_value = _to_bool(enable_resume) or bool(resume)
         enable_account_pool_value = _to_bool(enable_account_pool) or bool(accounts_file)
         enable_headless_api_value = _to_bool(enable_headless_api)
+        enable_anti_detect_value = _to_bool(enable_anti_detect)
         init_db_value = init_db.value if init_db else None
 
         # Parse specified_id and creator_id into lists
@@ -428,6 +438,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.ENABLE_ACCOUNT_POOL = enable_account_pool_value
         config.ACCOUNTS_IMPORT_FILE = accounts_file
         config.ENABLE_HEADLESS_API = enable_headless_api_value
+        config.ENABLE_ANTI_DETECT = enable_anti_detect_value
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
@@ -484,6 +495,7 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             enable_account_pool=config.ENABLE_ACCOUNT_POOL,
             accounts_file=config.ACCOUNTS_IMPORT_FILE,
             enable_headless_api=config.ENABLE_HEADLESS_API,
+            enable_anti_detect=config.ENABLE_ANTI_DETECT,
         )
 
     command = typer.main.get_command(app)

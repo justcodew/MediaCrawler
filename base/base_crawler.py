@@ -30,6 +30,9 @@ class AbstractCrawler(ABC):
         # 用延迟 import 避免循环依赖(base ← checkpoint ← store)。
         from checkpoint.manager import CheckpointManager
         self.checkpoint_manager = CheckpointManager.disabled()
+        # 反检测协调器,默认禁用(no-op);config.ENABLE_ANTI_DETECT=True 时由 main 注入启用的实例。
+        from anti_detect.guard import AntiDetectGuard
+        self.anti_detect = AntiDetectGuard.disabled()
 
     @abstractmethod
     async def start(self):

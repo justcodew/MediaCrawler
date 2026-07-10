@@ -133,6 +133,12 @@ async def _run_crawler(c: AbstractCrawler, checkpoint_manager=None) -> None:
     global crawler
     crawler = c  # 让 async_cleanup/_force_stop 引用的全局 crawler 指向当前实例
 
+    # 反检测:启用时注入 guard(各平台 crawler 在 start() 里 attach_page)
+    if getattr(config, "ENABLE_ANTI_DETECT", False):
+        from anti_detect.guard import AntiDetectGuard
+        c.anti_detect = AntiDetectGuard(config.PLATFORM, enabled=True)
+        print(f"[Main] Anti-detect enabled for {config.PLATFORM}")
+
     # 断点续爬:注入 CheckpointManager
     if checkpoint_manager is not None:
         # 多账号模式:复用编排层已创建的 manager(所有账号共享同一 task_id)

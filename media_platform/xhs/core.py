@@ -114,6 +114,8 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
             self.context_page = await self.browser_context.new_page()
             await self.context_page.goto(self.index_url)
+            # 反检测:注入 page 给 guard(供截图感知/行为拟人化使用)
+            self.anti_detect.attach_page(self.context_page)
 
             # Create a client to interact with the Xiaohongshu website.
             self.xhs_client = await self.create_xhs_client(httpx_proxy_format)
@@ -206,9 +208,17 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     # 断点续爬:记录本页完成
                     await ckpt.save_page(keyword, page - 1, note_ids, search_id=search_id)
 
-                    # Sleep after each page navigation
-                    await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
-                    utils.logger.info(f"[XiaoHongShuCrawler.search] Sleeping for {config.CRAWLER_MAX_SLEEP_SEC} seconds after page {page-1}")
+                    # 反检测:截图风控感知 + 拟人化停顿(替代裸 asyncio.sleep)
+                    risk = await self.anti_detect.check_risk()
+                    if risk.is_risk:
+                        action = await self.anti_detect.handle(risk)
+                        if action == "stop":
+                            utils.logger.warning(f"[XiaoHongShuCrawler.search] 检测到风控({risk.risk_type.value}),停止采集以保护账号")
+                            from anti_detect import RiskControlError
+                            raise RiskControlError(risk)
+                    # 拟人化停顿 + 模拟浏览
+                    await self.anti_detect.humanized_sleep(config.CRAWLER_MAX_SLEEP_SEC)
+                    await self.anti_detect.simulate_browse()
                 except DataFetchError:
                     utils.logger.error("[XiaoHongShuCrawler.search] Get note detail error")
                     break
