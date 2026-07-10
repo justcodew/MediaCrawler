@@ -124,15 +124,22 @@ async def main() -> None:
     await _generate_wordcloud_if_needed()
 
 
-async def _run_crawler(c: AbstractCrawler) -> None:
-    """运行单个 crawler 实例,处理断点续爬注入。
+async def _run_crawler(c: AbstractCrawler, checkpoint_manager=None) -> None:
+    """运行单个 crawler 实例。
 
-    多账号模式下会对每个账号的 crawler 调用本函数。
+    checkpoint_manager:若传入(多账号模式在编排层统一创建),直接注入;
+    否则按 ENABLE_RESUME 自行创建/恢复(单账号模式)。
     """
     global crawler
     crawler = c  # 让 async_cleanup/_force_stop 引用的全局 crawler 指向当前实例
-    # 断点续爬:创建/恢复任务并注入 CheckpointManager
-    if getattr(config, "ENABLE_RESUME", False):
+
+    # 断点续爬:注入 CheckpointManager
+    if checkpoint_manager is not None:
+        # 多账号模式:复用编排层已创建的 manager(所有账号共享同一 task_id)
+        c.checkpoint_manager = checkpoint_manager
+        crawler_type_var.set(config.CRAWLER_TYPE)
+        await c.start()
+    elif getattr(config, "ENABLE_RESUME", False):
         from checkpoint import CheckpointManager, store as ckpt_store
         resume_id = getattr(config, "RESUME_TASK_ID", "") or ""
         if resume_id:
@@ -169,9 +176,10 @@ async def _run_with_account_pool() -> None:
     """多账号编排:从账号池取账号 → 为每账号建独立 crawler(独立 user_data_dir) → 跑一轮 → 归还。
 
     失败(风控)时自动切换下一账号;池耗尽则退出。
-    并发度由 config.ACCOUNT_CONCURRENCY 控制(默认1=串行)。
+    并发度由 config.ACCOUNT_CONCURRENCY 控制(默认1=串行轮转)。
+    断点续爬:所有账号共享同一个 task_id(在编排层统一创建)。
     """
-    from account import AccountPool, store as acc_store
+    from account import AccountPool
     from account.manager import import_from_csv, import_from_excel
 
     # 可选:启动时从文件导入账号
@@ -191,37 +199,94 @@ async def _run_with_account_pool() -> None:
         fail_threshold=getattr(config, "ACCOUNT_POOL_FAIL_THRESHOLD", 3),
     )
     total = await pool.size()
-    print(f"[Main] Account pool: {total} available account(s) for {config.PLATFORM}")
+    concurrency = max(1, getattr(config, "ACCOUNT_CONCURRENCY", 1))
+    print(f"[Main] Account pool: {total} available account(s) for {config.PLATFORM}, concurrency={concurrency}")
     if total == 0:
         print("[Main] Account pool empty, fallback to single-account mode")
         await _run_crawler(CrawlerFactory.create_crawler(platform=config.PLATFORM))
         return
 
-    # 串行轮转每个可用账号(并发版可作为后续增强)
-    used: set = set()
+    # 断点续爬:在编排层统一创建 task_id,所有账号共享(避免碎片化)
+    checkpoint_manager = None
+    if getattr(config, "ENABLE_RESUME", False):
+        from checkpoint import CheckpointManager, store as ckpt_store
+        resume_id = getattr(config, "RESUME_TASK_ID", "") or ""
+        if resume_id:
+            task = await ckpt_store.get_task(resume_id)
+            task_id = resume_id if task else await ckpt_store.create_task(
+                config.PLATFORM, config.CRAWLER_TYPE,
+                {"keywords": config.KEYWORDS, "start_page": config.START_PAGE},
+            )
+            if task:
+                await ckpt_store.mark_task_status(task_id, "running")
+        else:
+            task_id = await ckpt_store.create_task(
+                config.PLATFORM, config.CRAWLER_TYPE,
+                {"keywords": config.KEYWORDS, "start_page": config.START_PAGE},
+            )
+        print(f"[Main] Shared checkpoint task: {task_id}")
+        checkpoint_manager = CheckpointManager(task_id, config.PLATFORM, enabled=True)
+
+    # 并发模式:用 semaphore 限制并发度,多账号同时跑
+    if concurrency > 1:
+        await _run_accounts_concurrent(pool, concurrency, checkpoint_manager)
+    else:
+        await _run_accounts_serial(pool, checkpoint_manager)
+
+    # 断点续爬:任务完成
+    if checkpoint_manager is not None:
+        await checkpoint_manager.complete()
+
+
+async def _run_accounts_serial(pool, checkpoint_manager) -> None:
+    """串行轮转:一次用一个账号,失败切下一个,成功或池耗尽则结束。"""
     while True:
         account = await pool.acquire()
-        if account is None or account.db_id in used:
-            break
-        used.add(account.db_id)
+        if account is None:
+            print("[Main] Account pool exhausted (no active account).")
+            return
         print(f"[Main] Using account: {account.nickname} ({account.account_id})")
-        crawler = CrawlerFactory.create_crawler(platform=config.PLATFORM)
-        crawler._account_info = account  # 供 crawler 内部按账号隔离 user_data_dir/cookie
+        c = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+        c._account_info = account  # 供 crawler 内部按账号隔离 user_data_dir/cookie
         try:
-            await _run_crawler(crawler)
+            await _run_crawler(c, checkpoint_manager=checkpoint_manager)
             await pool.release(account, success=True)
             print(f"[Main] Account {account.account_id} finished successfully")
-            break  # 任务完成,无需继续轮转
+            return  # 任务完成
         except Exception as e:
             await pool.mark_failed(account, error=str(e))
             print(f"[Main] Account {account.account_id} failed: {e}, rotating to next...")
             continue
 
-    _flush_excel_if_needed()
 
-    # Generate wordcloud after crawling is complete
-    # Only for JSON save mode
-    await _generate_wordcloud_if_needed()
+async def _run_accounts_concurrent(pool, concurrency: int, checkpoint_manager) -> None:
+    """并发模式:同时用 concurrency 个账号跑(各账号独立 user_data_dir)。
+
+    注意:并发模式下 checkpoint 共享同一 task_id,多账号可能并发写同一 scope 的断点,
+    故并发模式建议配合不同 keyword 分片,或关闭断点续爬。
+    """
+    sem = asyncio.Semaphore(concurrency)
+
+    async def worker():
+        while True:
+            account = await pool.acquire()
+            if account is None:
+                return
+            async with sem:
+                print(f"[Main] Using account: {account.nickname} ({account.account_id})")
+                c = CrawlerFactory.create_crawler(platform=config.PLATFORM)
+                c._account_info = account
+                try:
+                    await _run_crawler(c, checkpoint_manager=checkpoint_manager)
+                    await pool.release(account, success=True)
+                    print(f"[Main] Account {account.account_id} finished successfully")
+                except Exception as e:
+                    await pool.mark_failed(account, error=str(e))
+                    print(f"[Main] Account {account.account_id} failed: {e}")
+
+    # 启动 concurrency 个 worker,直到所有账号用完
+    workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+    await asyncio.gather(*workers, return_exceptions=True)
 
 
 async def async_cleanup() -> None:

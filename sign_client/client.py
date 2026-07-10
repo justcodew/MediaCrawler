@@ -35,8 +35,10 @@ class SignServiceClient:
     def __init__(self, base_url: str, timeout: float = 5.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
-        # 连接失败标记:一旦连续失败,短期内跳过 HTTP 直走 fallback,避免每个请求都等超时
+        # 连接失败标记:一旦失败,短期内跳过 HTTP 直走 fallback,避免每个请求都等超时
         self._unavailable = False
+        self._unavailable_since = 0.0  # 标记不可用的时间戳
+        self._retry_interval = 30.0  # 不可用后每隔 N 秒重试一次(给服务恢复的机会)
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=timeout,
@@ -45,8 +47,12 @@ class SignServiceClient:
 
     async def _post_sign(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """请求签名服务,失败返回 None(不抛异常,交给 fallback)"""
+        import time
         if self._unavailable:
-            return None
+            # 不可用期间定期重试,避免服务恢复后仍永久走 fallback
+            if time.time() - self._unavailable_since < self._retry_interval:
+                return None
+            # 超过重试间隔,放行一次试探(下面若成功会重置 _unavailable)
         try:
             resp = await self._client.post("/sign", json=payload)
             if resp.status_code == 200:
@@ -57,13 +63,14 @@ class SignServiceClient:
             )
             return None
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
-            # 服务未启动 / 端口不通 —— 标记不可用,后续直接 fallback
+            # 服务未启动 / 端口不通 —— 标记不可用,后续直接 fallback(但会定期重试)
             if not self._unavailable:
                 logger.warning(
                     f"[SignClient] 签名服务不可达 ({type(e).__name__}),已切换为本地签名 fallback。"
                     f"启动 SignSrv (sign_service/app.py) 并设 ENABLE_SIGN_SERVICE=True 可恢复。"
                 )
             self._unavailable = True
+            self._unavailable_since = time.time()
             return None
         except Exception as e:
             logger.warning(f"[SignClient] 签名服务未知异常 ({type(e).__name__}): {e}, 走 fallback")

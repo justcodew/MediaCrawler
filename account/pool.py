@@ -46,11 +46,14 @@ class AccountPool:
         self._lock = asyncio.Lock()  # 串行化 acquire/release,避免同一账号被并发取用
 
     async def acquire(self) -> Optional[AccountInfo]:
-        """取一个可用账号并标记 in_use。池耗尽返回 None。"""
+        """取一个可用账号并标记 in_use。池耗尽返回 None。
+
+        会先把超过冷却期的 cooling 账号恢复为 active(基于 last_used_ts 判定,
+        即使进程重启过也能正确恢复——不依赖后台任务)。
+        """
         if not self.enabled:
             return None
         async with self._lock:
-            # 先把过期的 cooling 账号恢复为 active
             await self._revive_cooled_accounts()
             account = await store.get_available_account(self.platform)
             if account is None:
@@ -102,16 +105,23 @@ class AccountPool:
         return len(active)
 
     async def _cooling_recover(self, db_id: int) -> None:
-        """冷却期过后把账号恢复为 active(后台任务)"""
+        """冷却期过后把账号恢复为 active(后台任务,加速恢复)。
+
+        主要恢复机制是 _revive_cooled_accounts(基于时间,进程重启也有效);
+        本任务作为进程存活时的快速恢复补充。
+        """
         await asyncio.sleep(COOLING_SECONDS)
         try:
             await store.set_status(db_id, STATUS_ACTIVE, is_success=True)
         except Exception:
-            pass  # 恢复失败不影响主流程,下次重启也会重新评估
+            pass
 
     async def _revive_cooled_accounts(self) -> None:
-        """保留扩展点:目前 cooling 恢复由 _cooling_recover 后台任务处理,这里无需操作。"""
-        return
+        """把超过冷却期的 cooling 账号恢复为 active(基于 last_used_ts,进程重启也有效)。"""
+        try:
+            await store.revive_cooled_accounts(self.platform, COOLING_SECONDS)
+        except Exception:
+            pass  # 恢复失败不阻塞 acquire
 
     @classmethod
     def disabled(cls) -> "AccountPool":

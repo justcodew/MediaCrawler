@@ -146,3 +146,34 @@ async def delete_account(db_id: int) -> None:
         raise
     finally:
         await session.close()
+
+
+async def revive_cooled_accounts(platform: str, cooling_seconds: int) -> int:
+    """把超过冷却期的 cooling 账号恢复为 active,返回恢复数量。
+
+    基于 last_used_ts 判定(进入 cooling 时记录的时间),即使进程重启过也能正确恢复。
+    """
+    now = int(time.time())
+    threshold = now - cooling_seconds
+    session = await _get_session()
+    try:
+        stmt = select(Account).where(
+            Account.platform == platform,
+            Account.status == STATUS_COOLING,
+        )
+        result = await session.execute(stmt)
+        revived = 0
+        for acc in result.scalars():
+            ts = acc.last_used_ts or 0
+            if ts <= threshold:
+                acc.status = STATUS_ACTIVE
+                acc.fail_count = 0
+                revived += 1
+        if revived:
+            await session.commit()
+        return revived
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
