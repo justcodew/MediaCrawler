@@ -185,9 +185,13 @@ ENABLE_ANTI_DETECT = False
 HUMANIZE_SLEEP_JITTER = 3      # 随机抖动秒数(加在 CRAWLER_MAX_SLEEP_SEC 上)
 HUMANIZE_PAGE_STAY_SEC = 3     # 进入页面后停留秒数(模拟阅读)
 HUMANIZE_SCROLL_TIMES = 3      # 页面滚动次数(模拟浏览)
-# 截图风控感知:每页请求后截图 → LLM 多模态识别风控页面
-ANTI_DETECT_SCREENSHOT = True  # 是否截图给 LLM 判定
+# 截图风控感知:每页请求后截图 → OCR/LLM 识别风控页面
+ANTI_DETECT_SCREENSHOT = True  # 是否截图做风控判定
 ANTI_DETECT_SCREENSHOT_DIR = "data/risk_screenshots"  # 截图保存目录
+# OCR 通道(优先):用 RapidOCR(ppocr)提取截图文字 → 关键词判定。纯本地零成本。
+# 安装: pip install rapidocr-onnxruntime (或 uv add rapidocr-onnxruntime)
+# 未安装时自动 fallback 到 LLM 截图多模态识别。
+ANTI_DETECT_USE_OCR = True
 # 风控响应:检测到风控时的处理策略(stop=停止 | backoff=退避重试)
 ANTI_DETECT_ON_RISK = "stop"
 # 智能退避:连续风控时的退避参数
