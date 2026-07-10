@@ -76,7 +76,16 @@ class ZhiHuClient(AbstractApiClient, ProxyRefreshMixin):
         d_c0 = self.cookie_dict.get("d_c0")
         if not d_c0:
             raise Exception("d_c0 not found in cookies")
-        sign_res = sign(url, self.default_headers["cookie"])
+        # 签名:优先走签名服务,不可达时自动 fallback 到本地 execjs
+        try:
+            import config as _cfg
+            if getattr(_cfg, "ENABLE_SIGN_SERVICE", False):
+                from sign_client import get_client
+                sign_res = await get_client().sign_zhihu(url, self.default_headers["cookie"])
+            else:
+                sign_res = sign(url, self.default_headers["cookie"])
+        except Exception:
+            sign_res = sign(url, self.default_headers["cookie"])
         headers = self.default_headers.copy()
         headers['x-zst-81'] = sign_res["x-zst-81"]
         headers['x-zse-96'] = sign_res["x-zse-96"]

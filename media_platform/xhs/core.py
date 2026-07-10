@@ -55,6 +55,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self) -> None:
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.rednote.com" if config.XHS_INTERNATIONAL else "https://www.xiaohongshu.com"
         self.cookie_urls = [self.index_url]
         # self.user_agent = utils.get_user_agent()
@@ -68,6 +69,25 @@ class XiaoHongShuCrawler(AbstractCrawler):
             self.ip_proxy_pool = await create_ip_pool(config.IP_PROXY_POOL_COUNT, enable_validate_ip=True)
             ip_proxy_info: IpInfoModel = await self.ip_proxy_pool.get_proxy()
             playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(ip_proxy_info)
+
+        # 脱浏览器模式:已有 cookie 时跳过浏览器,纯 httpx + 签名服务(xhs 签名为纯算法)
+        cookie_str = getattr(self, "_account_info", None)
+        if cookie_str is not None:
+            cookie_str = self._account_info.cookies
+        else:
+            cookie_str = config.COOKIES
+        if getattr(config, "ENABLE_HEADLESS_API", False) and cookie_str:
+            utils.logger.info("[XiaoHongShuCrawler] Headless API mode: skipping browser, using cookie directly")
+            self.xhs_client = await self.create_xhs_client_headless(httpx_proxy_format, cookie_str)
+            crawler_type_var.set(config.CRAWLER_TYPE)
+            if config.CRAWLER_TYPE == "search":
+                await self.search()
+            elif config.CRAWLER_TYPE == "detail":
+                await self.get_specified_notes()
+            elif config.CRAWLER_TYPE == "creator":
+                await self.get_creators_and_notes()
+            utils.logger.info("[XiaoHongShuCrawler.start] Xhs Crawler finished (headless)")
+            return
 
         async with async_playwright() as playwright:
             # Choose launch mode based on configuration
@@ -133,11 +153,15 @@ class XiaoHongShuCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < xhs_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = xhs_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager  # 断点续爬(未启用时为 no-op)
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[XiaoHongShuCrawler.search] Current search keyword: {keyword}")
-            page = 1
-            search_id = get_search_id()
+            # 断点续爬:恢复上次进度(page / search_id / 已处理 note_id)
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
+            # search_id 必须复用断点里的,否则翻页会错位
+            search_id = scope_state.search_id or get_search_id()
             while (page - start_page + 1) * xhs_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 if page < start_page:
                     utils.logger.info(f"[XiaoHongShuCrawler.search] Skip page {page}")
@@ -159,13 +183,15 @@ class XiaoHongShuCrawler(AbstractCrawler):
                         utils.logger.info("[XiaoHongShuCrawler.search] No more content!")
                         break
                     semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
+                    # 断点续爬:跳过已处理的 note_id
+                    raw_items = [post_item for post_item in notes_res.get("items", {}) if post_item.get("model_type") not in ("rec_query", "hot_query")]
                     task_list = [
                         self.get_note_detail_async_task(
                             note_id=post_item.get("id"),
                             xsec_source=post_item.get("xsec_source"),
                             xsec_token=post_item.get("xsec_token"),
                             semaphore=semaphore,
-                        ) for post_item in notes_res.get("items", {}) if post_item.get("model_type") not in ("rec_query", "hot_query")
+                        ) for post_item in raw_items if not ckpt.is_processed(keyword, post_item.get("id"))
                     ]
                     note_details = await asyncio.gather(*task_list)
                     for note_detail in note_details:
@@ -177,6 +203,8 @@ class XiaoHongShuCrawler(AbstractCrawler):
                     page += 1
                     utils.logger.info(f"[XiaoHongShuCrawler.search] Note details: {note_details}")
                     await self.batch_get_note_comments(note_ids, xsec_tokens)
+                    # 断点续爬:记录本页完成
+                    await ckpt.save_page(keyword, page - 1, note_ids, search_id=search_id)
 
                     # Sleep after each page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -248,10 +276,17 @@ class XiaoHongShuCrawler(AbstractCrawler):
 
         Note: Must specify note_id, xsec_source, xsec_token
         """
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         get_note_detail_task_list = []
         for full_note_url in config.XHS_SPECIFIED_NOTE_URL_LIST:
             note_url_info: NoteUrlInfo = parse_note_info_from_note_url(full_note_url)
             utils.logger.info(f"[XiaoHongShuCrawler.get_specified_notes] Parse note url info: {note_url_info}")
+            # 断点续爬:跳过已处理的 note_id
+            if ckpt.is_processed(scope, note_url_info.note_id):
+                utils.logger.info(f"[XiaoHongShuCrawler.get_specified_notes] Skip processed note: {note_url_info.note_id}")
+                continue
             crawler_task = self.get_note_detail_async_task(
                 note_id=note_url_info.note_id,
                 xsec_source=note_url_info.xsec_source,
@@ -263,13 +298,17 @@ class XiaoHongShuCrawler(AbstractCrawler):
         need_get_comment_note_ids = []
         xsec_tokens = []
         note_details = await asyncio.gather(*get_note_detail_task_list)
+        done_ids = []
         for note_detail in note_details:
             if note_detail:
                 need_get_comment_note_ids.append(note_detail.get("note_id", ""))
                 xsec_tokens.append(note_detail.get("xsec_token", ""))
                 await xhs_store.update_xhs_note(note_detail)
                 await self.get_notice_media(note_detail)
+                done_ids.append(note_detail.get("note_id", ""))
         await self.batch_get_note_comments(need_get_comment_note_ids, xsec_tokens)
+        # 断点续爬:记录本次处理的 note_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_note_detail_async_task(
         self,
@@ -391,6 +430,42 @@ class XiaoHongShuCrawler(AbstractCrawler):
         )
         return xhs_client_obj
 
+    async def create_xhs_client_headless(self, httpx_proxy: Optional[str], cookie_str: str) -> XiaoHongShuClient:
+        """脱浏览器模式:直接用 cookie 字符串构造 client,不依赖 browser_context。
+
+        xhs 签名已是纯算法(sign_with_xhshow),无需 page.evaluate,故可完全脱离浏览器。
+        """
+        from tools.crawler_util import convert_str_cookie_to_dict
+        cookie_dict = convert_str_cookie_to_dict(cookie_str)
+        ua = self.user_agent
+        if getattr(self, "_account_info", None) and self._account_info.user_agent:
+            ua = self._account_info.user_agent
+        xhs_client_obj = XiaoHongShuClient(
+            proxy=httpx_proxy,
+            headers={
+                "accept": "application/json, text/plain, */*",
+                "accept-language": "zh-CN,zh;q=0.9",
+                "cache-control": "no-cache",
+                "content-type": "application/json;charset=UTF-8",
+                "origin": self.index_url,
+                "pragma": "no-cache",
+                "priority": "u=1, i",
+                "referer": f"{self.index_url}/",
+                "sec-ch-ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-site",
+                "user-agent": ua,
+                "Cookie": cookie_str,
+            },
+            playwright_page=None,  # 脱浏览器:不再需要 page
+            cookie_dict=cookie_dict,
+            proxy_ip_pool=self.ip_proxy_pool,
+        )
+        return xhs_client_obj
+
     async def launch_browser(
         self,
         chromium: BrowserType,
@@ -403,7 +478,10 @@ class XiaoHongShuCrawler(AbstractCrawler):
         if config.SAVE_LOGIN_STATE:
             # feat issue #14
             # we will save login state to avoid login every time
-            user_data_dir = os.path.join(os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM)  # type: ignore
+            # 多账号模式:按账号隔离 user_data_dir
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
+            user_data_dir = os.path.join(os.getcwd(), "browser_data", dir_name)
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -436,6 +514,7 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

@@ -95,13 +95,22 @@ class XiaoHongShuClient(AbstractApiClient, ProxyRefreshMixin):
         else:
             raise ValueError("params or payload is required")
 
-        # 使用 xhshow 纯算法生成签名
-        signs = sign_with_xhshow(
-            uri=url,
-            data=data,
-            cookie_str=self.headers.get("Cookie", ""),
-            method=method,
-        )
+        # 签名:优先走签名服务(ENABLE_SIGN_SERVICE),不可达时自动 fallback 到本地 xhshow 算法
+        from sign_client import get_client, is_enabled
+        if is_enabled():
+            signs = await get_client().sign_xhs(
+                uri=url,
+                data=data,
+                cookie_str=self.headers.get("Cookie", ""),
+                method=method,
+            )
+        else:
+            signs = sign_with_xhshow(
+                uri=url,
+                data=data,
+                cookie_str=self.headers.get("Cookie", ""),
+                method=method,
+            )
 
         headers = {
             "X-S": signs["x-s"],

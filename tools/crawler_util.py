@@ -231,3 +231,25 @@ def extract_url_params_to_dict(url: str) -> Dict:
     parsed_url = urllib.parse.urlparse(url)
     url_params_dict = dict(urllib.parse.parse_qsl(parsed_url.query))
     return url_params_dict
+
+
+def resolve_user_data_dir_name(platform: str, account=None) -> str:
+    """解析浏览器 user_data_dir 的目录名(支持多账号隔离)。
+
+    - 无 account(单账号模式): 返回 "<platform>_user_data_dir"(原行为)
+    - 有 account(多账号模式): 返回 "<platform>_<account_id>_user_data_dir"
+
+    account 通常是 crawler._account_info (AccountInfo),只要有 account_id + platform 即可。
+    """
+    import config
+    if account is not None and getattr(account, "account_id", ""):
+        aid = account.account_id
+        tmpl = getattr(config, "USER_DATA_DIR", "%s_user_data_dir")
+        if "%s" in tmpl:
+            return tmpl % f"{platform}_{aid}"
+        return f"{platform}_{aid}_user_data_dir"
+    # 单账号原行为
+    tmpl = getattr(config, "USER_DATA_DIR", "%s_user_data_dir")
+    if "%s" in tmpl:
+        return tmpl % platform
+    return f"{platform}_user_data_dir"

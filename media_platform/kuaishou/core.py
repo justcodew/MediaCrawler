@@ -55,6 +55,7 @@ class KuaishouCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self):
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.kuaishou.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
@@ -133,13 +134,16 @@ class KuaishouCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < ks_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = ks_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
-            search_session_id = ""
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[KuaishouCrawler.search] Current search keyword: {keyword}"
             )
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            search_session_id = scope_state.search_id
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (
                 page - start_page + 1
             ) * ks_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
@@ -175,6 +179,8 @@ class KuaishouCrawler(AbstractCrawler):
 
                 # batch fetch video comments
                 page += 1
+                # 断点续爬:记录本页完成
+                await ckpt.save_page(keyword, page - 1, video_id_list, search_id=search_session_id)
 
                 # Sleep after page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -338,9 +344,11 @@ class KuaishouCrawler(AbstractCrawler):
             "[KuaishouCrawler.launch_browser] Begin create browser context ..."
         )
         if config.SAVE_LOGIN_STATE:
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
             user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
+                os.getcwd(), "browser_data", dir_name
+            )
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -375,6 +383,7 @@ class KuaishouCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

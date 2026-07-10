@@ -25,6 +25,12 @@ from playwright.async_api import BrowserContext, BrowserType, Playwright
 
 class AbstractCrawler(ABC):
 
+    def __init__(self) -> None:
+        # 断点续爬管理器,默认禁用(no-op);main.py 启用断点续爬时会注入启用的实例。
+        # 用延迟 import 避免循环依赖(base ← checkpoint ← store)。
+        from checkpoint.manager import CheckpointManager
+        self.checkpoint_manager = CheckpointManager.disabled()
+
     @abstractmethod
     async def start(self):
         """

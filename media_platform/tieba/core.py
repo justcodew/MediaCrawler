@@ -53,6 +53,7 @@ class TieBaCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self) -> None:
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://tieba.baidu.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
@@ -158,12 +159,15 @@ class TieBaCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < tieba_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = tieba_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[BaiduTieBaCrawler.search] Current search keyword: {keyword}"
             )
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (
                 page - start_page + 1
             ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
@@ -192,9 +196,10 @@ class TieBaCrawler(AbstractCrawler):
                     utils.logger.info(
                         f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
                     )
-                    await self.get_specified_notes(
-                        note_id_list=[note_detail.note_id for note_detail in notes_list]
-                    )
+                    note_ids = [n.note_id for n in notes_list]
+                    await self.get_specified_notes(note_id_list=note_ids)
+                    # 断点续爬:记录本页完成
+                    await ckpt.save_page(keyword, page, note_ids)
 
                     # Sleep after page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -618,9 +623,11 @@ class TieBaCrawler(AbstractCrawler):
         if config.SAVE_LOGIN_STATE:
             # feat issue #14
             # we will save login state to avoid login every time
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
             user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
+                os.getcwd(), "browser_data", dir_name
+            )
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -655,6 +662,7 @@ class TieBaCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

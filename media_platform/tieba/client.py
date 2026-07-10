@@ -99,7 +99,16 @@ class BaiduTieBaClient(AbstractApiClient):
             sign_source = data if method.upper() == "POST" else params
             sign_source.setdefault("subapp_type", "pc")
             sign_source.setdefault("_client_type", "20")
-            sign_source["sign"] = self._sign_pc_params(sign_source)
+            # 签名:优先走签名服务,不可达时 fallback 本地 md5
+            try:
+                if getattr(config, "ENABLE_SIGN_SERVICE", False):
+                    from sign_client import get_client
+                    signed = await get_client().sign_tieba(sign_source, method=method, data=data)
+                    sign_source["sign"] = signed.get("sign", "")
+                else:
+                    sign_source["sign"] = self._sign_pc_params(sign_source)
+            except Exception:
+                sign_source["sign"] = self._sign_pc_params(sign_source)
 
         url = f"{self._host}{uri}"
         if params:

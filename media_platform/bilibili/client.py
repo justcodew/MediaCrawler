@@ -93,6 +93,14 @@ class BilibiliClient(AbstractApiClient, ProxyRefreshMixin):
         if not req_data:
             return {}
         img_key, sub_key = await self.get_wbi_keys()
+        # 签名:优先走签名服务(需把 img_key/sub_key 传过去),不可达时 fallback 本地 wbi 算法
+        try:
+            import config as _cfg
+            if getattr(_cfg, "ENABLE_SIGN_SERVICE", False):
+                from sign_client import get_client
+                return await get_client().sign_bilibili(req_data, img_key, sub_key)
+        except Exception:
+            pass
         return BilibiliSign(img_key, sub_key).sign(req_data)
 
     async def get_wbi_keys(self) -> Tuple[str, str]:

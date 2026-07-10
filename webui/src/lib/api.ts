@@ -101,4 +101,41 @@ export const envApi = {
   check: () => api.get<EnvCheckResult>('/env/check'),
 }
 
+// ===== AI 内容分析 Agent =====
+export interface AnalysisPlatform {
+  platforms: string[]
+}
+export interface AnalysisContent {
+  note_id: string
+  title: string
+  liked_count: number | string
+}
+export interface RemixResult {
+  note_id: string
+  platform: string
+  content_text: string
+  report: string
+  ts: number
+}
+export interface RemixRequest {
+  platform: string
+  note_ids?: string[]
+  limit?: number
+  save?: boolean
+}
+
+export const analysisApi = {
+  getPlatforms: () => api.get<AnalysisPlatform>('/analysis/platforms'),
+  getContents: (platform: string, limit = 20) =>
+    api.get<{ platform: string; total: number; items: AnalysisContent[] }>(
+      '/analysis/contents', { params: { platform, limit } }
+    ),
+  remix: (req: RemixRequest) =>
+    api.post<{ status: string; configured: boolean; results: RemixResult[] }>(
+      '/analysis/remix', req
+    ),
+  getReports: () =>
+    api.get<{ total: number; reports: any[] }>('/analysis/reports'),
+}
+
 export default api

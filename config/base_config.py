@@ -140,6 +140,42 @@ CRAWLER_MAX_SLEEP_SEC = 2
 # 警告：禁用 SSL 验证将使所有流量暴露于中间人攻击风险，请勿在生产环境中开启。
 DISABLE_SSL_VERIFY = False
 
+# ==================== 签名服务 (SignSrv) 配置 ====================
+# 将各平台签名算法(execjs + JS / 纯 Python)解耦为独立 HTTP 微服务 (sign_service/app.py)，
+# crawler 主进程无需安装 Node 运行时即可签名。
+#
+# 启用步骤:
+#   1. 启动签名服务: uv run uvicorn sign_service.app:app --port 8888
+#   2. 将 ENABLE_SIGN_SERVICE 设为 True
+# 若服务未启动或不可达,会自动 fallback 到各平台原有的本地签名函数,功能不中断。
+ENABLE_SIGN_SERVICE = False
+SIGN_SERVICE_URL = "http://127.0.0.1:8888"
+
+# ==================== 断点续爬 (Resume) 配置 ====================
+# 启用后,爬虫会把进度(已抓到第几页、search_id、已处理 note_id)持久化到
+# database/checkpoints.db(独立 sqlite,不依赖 SAVE_DATA_OPTION)。
+# 中断后可用 --resume <task_id> 从断点继续,避免重复抓取。
+# 首次运行会生成 task_id 并打印,便于后续续爬。
+ENABLE_RESUME = False
+RESUME_TASK_ID = ""  # 续爬时填入上次任务的 task_id
+
+# ==================== 多账号 (Account Pool) 配置 ====================
+# 启用后,crawler 会从账号池(database/accounts.db)轮转使用多个账号,
+# 每账号独立 user_data_dir 与可选代理,失败自动切换。详见 account/README.md
+ENABLE_ACCOUNT_POOL = False
+ACCOUNT_POOL_FAIL_THRESHOLD = 3   # 连续失败次数达此值,账号进入冷却
+ACCOUNT_CONCURRENCY = 1           # 同时使用几个账号(1=串行轮转,>1=并发)
+ACCOUNTS_IMPORT_FILE = ""         # 启动时从该 CSV/Excel 导入账号(可选)
+
+# ==================== 脱浏览器模式 (Headless API) 配置 ====================
+# 当前生效平台:xhs / zhihu(签名均为纯算法,无需 page.evaluate)。
+# 开启后,若已有 cookie(来自 config.COOKIES 或账号池),这些平台会跳过浏览器启动,
+# 直接用 httpx + 签名服务完成请求,大幅降低资源占用(无 playwright/CDP)。
+# 无 cookie 时仍走 CDP 登录拿 cookie。
+# 注:bilibili(需浏览器 localStorage 的 wbi keys)、tieba(PC API 经 page.evaluate fetch)、
+# 抖音/微博/快手 仍需浏览器,不适用本模式。
+ENABLE_HEADLESS_API = False
+
 from .bilibili_config import *
 from .xhs_config import *
 from .dy_config import *
