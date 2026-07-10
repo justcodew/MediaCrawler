@@ -634,12 +634,20 @@ class BilibiliCrawler(AbstractCrawler):
         utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Crawling the details of creators")
         utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsing creator URLs...")
 
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         creator_id_list = []
         for creator_url in creator_url_list:
             try:
                 creator_info = parse_creator_info_from_url(creator_url)
-                creator_id_list.append(int(creator_info.creator_id))
-                utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsed creator ID: {creator_info.creator_id} from {creator_url}")
+                cid = str(creator_info.creator_id)
+                # 断点续爬:跳过已处理的 creator
+                if ckpt.is_processed(scope, cid):
+                    utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Skip processed creator: {cid}")
+                    continue
+                creator_id_list.append(int(cid))
+                utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsed creator ID: {cid} from {creator_url}")
             except ValueError as e:
                 utils.logger.error(f"[BilibiliCrawler.get_all_creator_details] Failed to parse creator URL: {e}")
                 continue
@@ -656,6 +664,8 @@ class BilibiliCrawler(AbstractCrawler):
             utils.logger.warning(f"[BilibiliCrawler.get_all_creator_details] error in the task list. The creator will not be included. {e}")
 
         await asyncio.gather(*task_list)
+        # 断点续爬:记录已处理的 creator
+        await ckpt.save_page(scope, 1, [str(c) for c in creator_id_list])
 
     async def get_creator_details(self, creator_id: int, semaphore: asyncio.Semaphore):
         """

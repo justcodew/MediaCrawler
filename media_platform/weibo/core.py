@@ -325,7 +325,14 @@ class WeiboCrawler(AbstractCrawler):
 
         """
         utils.logger.info("[WeiboCrawler.get_creators_and_notes] Begin get weibo creators")
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for user_id in config.WEIBO_CREATOR_ID_LIST:
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, str(user_id)):
+                utils.logger.info(f"[WeiboCrawler.get_creators_and_notes] Skip processed creator: {user_id}")
+                continue
             createor_info_res: Dict = await self.wb_client.get_creator_info_by_id(creator_id=user_id)
             if createor_info_res:
                 createor_info: Dict = createor_info_res.get("userInfo", {})
@@ -350,6 +357,8 @@ class WeiboCrawler(AbstractCrawler):
 
                 note_ids = [note_item.get("mblog", {}).get("id") for note_item in all_notes_list if note_item.get("mblog", {}).get("id")]
                 await self.batch_get_notes_comments(note_ids)
+                # 断点续爬:记录该 creator 已处理
+                await ckpt.save_page(scope, 1, [str(user_id)])
 
             else:
                 utils.logger.error(f"[WeiboCrawler.get_creators_and_notes] get creator info error, creator_id:{user_id}")

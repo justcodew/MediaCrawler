@@ -390,7 +390,14 @@ class TieBaCrawler(AbstractCrawler):
         utils.logger.info(
             "[TieBaCrawler.get_creators_and_notes] Begin get tieba creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.TIEBA_CREATOR_URL_LIST:
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, creator_url):
+                utils.logger.info(f"[TieBaCrawler.get_creators_and_notes] Skip processed creator: {creator_url}")
+                continue
             creator_info: TiebaCreator = await self.tieba_client.get_creator_info_by_url(
                 creator_url=creator_url
             )
@@ -414,6 +421,8 @@ class TieBaCrawler(AbstractCrawler):
                 )
 
                 await self.batch_get_note_comments(all_notes_list)
+                # 断点续爬:记录该 creator 已处理
+                await ckpt.save_page(scope, 1, [creator_url])
 
             else:
                 utils.logger.error(

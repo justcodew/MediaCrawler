@@ -216,12 +216,19 @@ class XiaoHongShuCrawler(AbstractCrawler):
     async def get_creators_and_notes(self) -> None:
         """Get creator's notes and retrieve their comment information."""
         utils.logger.info("[XiaoHongShuCrawler.get_creators_and_notes] Begin get Xiaohongshu creators")
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.XHS_CREATOR_ID_LIST:
             try:
                 # Parse creator URL to get user_id and security tokens
                 creator_info: CreatorUrlInfo = parse_creator_info_from_url(creator_url)
                 utils.logger.info(f"[XiaoHongShuCrawler.get_creators_and_notes] Parse creator URL info: {creator_info}")
                 user_id = creator_info.user_id
+                # 断点续爬:跳过已处理的 creator
+                if ckpt.is_processed(scope, user_id):
+                    utils.logger.info(f"[XiaoHongShuCrawler.get_creators_and_notes] Skip processed creator: {user_id}")
+                    continue
 
                 # get creator detail info from web html content
                 createor_info: Dict = await self.xhs_client.get_creator_info(
@@ -252,6 +259,8 @@ class XiaoHongShuCrawler(AbstractCrawler):
                 note_ids.append(note_item.get("note_id"))
                 xsec_tokens.append(note_item.get("xsec_token"))
             await self.batch_get_note_comments(note_ids, xsec_tokens)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_id])
 
     async def fetch_creator_notes_detail(self, note_list: List[Dict]):
         """Concurrently obtain the specified post list and save the data"""

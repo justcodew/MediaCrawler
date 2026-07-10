@@ -15,6 +15,10 @@
     "runtime": {
       "title": "RUNTIME",
       "description": "Runtime parameters"
+    },
+    "proConfig": {
+      "title": "Pro Features",
+      "description": "Community enhanced features (off by default)"
     }
   },
   "field": {
@@ -56,7 +60,17 @@
     "commentExtraction": "Comment Extraction",
     "subComments": "Sub-comments",
     "headlessMode": "HEADLESS_MODE",
-    "headlessModeHint": "Run browser without GUI"
+    "headlessModeHint": "Run browser without GUI",
+    "signService": "Sign Service",
+    "signServiceHint": "Sign via standalone service, reduces Node dependency",
+    "resume": "Checkpoint Resume",
+    "resumeHint": "Resume from last progress after interruption",
+    "headlessApi": "Headless API",
+    "headlessApiHint": "Skip browser for xhs/zhihu when cookie exists",
+    "accountPool": "Account Pool",
+    "accountPoolHint": "Rotate multiple accounts from pool",
+    "accountsFile": "Accounts File",
+    "accountsFilePlaceholder": "path to accounts.csv (optional)"
   },
   "button": {
     "initiateScan": "INITIATE SCAN",

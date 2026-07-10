@@ -59,6 +59,12 @@ const defaultConfig: CrawlerConfig = {
   save_option: 'json',
   cookies: '',
   headless: false,
+  // Pro 功能默认关闭
+  enable_sign_service: false,
+  enable_resume: false,
+  enable_account_pool: false,
+  accounts_file: '',
+  enable_headless_api: false,
 }
 
 export const useCrawlerStore = create<CrawlerState>((set, get) => ({

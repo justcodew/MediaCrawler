@@ -418,12 +418,20 @@ class KuaishouCrawler(AbstractCrawler):
         utils.logger.info(
             "[KuaiShouCrawler.get_creators_and_videos] Begin get kuaishou creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.KS_CREATOR_ID_LIST:
             try:
                 # Parse creator URL to get user_id
                 creator_info: CreatorUrlInfo = parse_creator_info_from_url(creator_url)
                 utils.logger.info(f"[KuaiShouCrawler.get_creators_and_videos] Parse creator URL info: {creator_info}")
                 user_id = creator_info.user_id
+
+                # 断点续爬:跳过已处理的 creator
+                if ckpt.is_processed(scope, user_id):
+                    utils.logger.info(f"[KuaiShouCrawler.get_creators_and_videos] Skip processed creator: {user_id}")
+                    continue
 
                 # get creator detail info from web html content
                 createor_info: Dict = await self.ks_client.get_creator_info(user_id=user_id)
@@ -444,6 +452,8 @@ class KuaishouCrawler(AbstractCrawler):
                 video_item.get("photo", {}).get("id") for video_item in all_video_list
             ]
             await self.batch_get_video_comments(video_ids)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_id])
 
     async def fetch_creator_video_detail(self, video_list: List[Dict]):
         """

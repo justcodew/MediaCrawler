@@ -291,6 +291,9 @@ class DouYinCrawler(AbstractCrawler):
         utils.logger.info("[DouYinCrawler.get_creators_and_videos] Begin get douyin creators")
         utils.logger.info("[DouYinCrawler.get_creators_and_videos] Parsing creator URLs...")
 
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.DY_CREATOR_ID_LIST:
             try:
                 creator_info_parsed = parse_creator_info_from_url(creator_url)
@@ -298,6 +301,11 @@ class DouYinCrawler(AbstractCrawler):
                 utils.logger.info(f"[DouYinCrawler.get_creators_and_videos] Parsed sec_user_id: {user_id} from {creator_url}")
             except ValueError as e:
                 utils.logger.error(f"[DouYinCrawler.get_creators_and_videos] Failed to parse creator URL: {e}")
+                continue
+
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, user_id):
+                utils.logger.info(f"[DouYinCrawler.get_creators_and_videos] Skip processed creator: {user_id}")
                 continue
 
             creator_info: Dict = await self.dy_client.get_user_info(user_id)
@@ -309,6 +317,8 @@ class DouYinCrawler(AbstractCrawler):
 
             video_ids = [video_item.get("aweme_id") for video_item in all_video_list]
             await self.batch_get_note_comments(video_ids)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_id])
 
     async def fetch_creator_video_detail(self, video_list: List[Dict]):
         """

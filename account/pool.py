@@ -60,21 +60,29 @@ class AccountPool:
             return account
 
     async def release(self, account: AccountInfo, success: bool, error: str = "") -> None:
-        """归还账号:成功则 active,失败则累计计数,达阈值则 cooling"""
+        """归还账号:成功则 active(重置失败计数);失败则累加计数,达阈值则 cooling。"""
         if not self.enabled or account is None:
             return
         async with self._lock:
             if success:
-                await store.set_status(account.db_id, STATUS_ACTIVE)
+                await store.set_status(account.db_id, STATUS_ACTIVE, is_success=True)
+                account.fail_count = 0
                 return
-            # 失败:累加 fail_count(在 set_status 里做)
-            await store.set_status(account.db_id, STATUS_ACTIVE, error_msg=error or "failed")
-            # 检查是否达到阈值
-            infos = await store.list_accounts(self.platform)
-            for info in infos:
-                if info.db_id == account.db_id:
-                    # 重新读 fail_count(store 没返回该字段,这里用简化的阈值判定)
-                    break
+            # 失败:累加 fail_count,拿回最新计数
+            fail_count = await store.set_status(
+                account.db_id, STATUS_ACTIVE, error_msg=error or "failed", is_failure=True
+            )
+            account.fail_count = fail_count
+            # 达阈值 → 进入 cooling(冷却期内不会被 acquire)
+            if fail_count >= self.fail_threshold:
+                import logging
+                logging.getLogger("account").info(
+                    f"[AccountPool] account {account.account_id} reached fail threshold "
+                    f"({fail_count}/{self.fail_threshold}), entering cooling"
+                )
+                await store.set_status(account.db_id, STATUS_COOLING, error_msg=error or "cooling")
+                # 安排冷却后自动恢复(后台任务,不阻塞主流程)
+                asyncio.create_task(self._cooling_recover(account.db_id))
 
     async def mark_failed(self, account: AccountInfo, error: str = "") -> None:
         """标记账号失败并按阈值决定 cooling/disabled。与 release(success=False) 等价。"""
@@ -87,21 +95,23 @@ class AccountPool:
         await store.set_status(account.db_id, STATUS_DISABLED, error_msg=reason or "disabled")
 
     async def size(self) -> int:
-        """池内 active + cooling 账号数(可用总数)"""
+        """池内 active 账号数(立即可用总数;cooling 不计)"""
         if not self.enabled:
             return 0
         active = await store.list_accounts(self.platform, STATUS_ACTIVE)
-        cooling = await store.list_accounts(self.platform, STATUS_COOLING)
-        return len(active) + len(cooling)
+        return len(active)
+
+    async def _cooling_recover(self, db_id: int) -> None:
+        """冷却期过后把账号恢复为 active(后台任务)"""
+        await asyncio.sleep(COOLING_SECONDS)
+        try:
+            await store.set_status(db_id, STATUS_ACTIVE, is_success=True)
+        except Exception:
+            pass  # 恢复失败不影响主流程,下次重启也会重新评估
 
     async def _revive_cooled_accounts(self) -> None:
-        """把超过冷却期的 cooling 账号恢复为 active"""
-        now = int(time.time())
-        cooling = await store.list_accounts(self.platform, STATUS_COOLING)
-        for info in cooling:
-            # AccountInfo 没有 last_used_ts 字段,这里用简化策略:全恢复(由 acquire 的 lock 保证安全)
-            # 更精确的冷却判定可在 store 里按 last_used_ts 过滤
-            pass  # cooling 恢复交由 store.get_available_account 的 active 过滤;此处保留扩展点
+        """保留扩展点:目前 cooling 恢复由 _cooling_recover 后台任务处理,这里无需操作。"""
+        return
 
     @classmethod
     def disabled(cls) -> "AccountPool":

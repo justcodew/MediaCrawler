@@ -61,6 +61,7 @@ class AccountInfo:
         nickname: str = "",
         proxy_config: Optional[Dict[str, Any]] = None,
         db_id: Optional[int] = None,
+        fail_count: int = 0,
     ) -> None:
         self.account_id = account_id
         self.platform = platform
@@ -69,6 +70,7 @@ class AccountInfo:
         self.nickname = nickname
         self.proxy_config = proxy_config or {}
         self.db_id = db_id  # ORM 主键,回写状态用
+        self.fail_count = fail_count  # 连续失败次数(由 store 回填)
 
     @property
     def user_data_dir_name(self) -> str:
@@ -104,4 +106,5 @@ def account_orm_to_info(acc: "Account") -> AccountInfo:
         nickname=acc.nickname or "",
         proxy_config=proxy_cfg,
         db_id=acc.id,
+        fail_count=acc.fail_count or 0,
     )

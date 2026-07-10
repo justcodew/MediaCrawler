@@ -282,11 +282,18 @@ class ZhihuCrawler(AbstractCrawler):
         utils.logger.info(
             "[ZhihuCrawler.get_creators_and_notes] Begin get xiaohongshu creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for user_link in config.ZHIHU_CREATOR_URL_LIST:
             utils.logger.info(
                 f"[ZhihuCrawler.get_creators_and_notes] Begin get creator {user_link}"
             )
             user_url_token = user_link.split("/")[-1]
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, user_url_token):
+                utils.logger.info(f"[ZhihuCrawler.get_creators_and_notes] Skip processed creator: {user_url_token}")
+                continue
             # get creator detail info from web html content
             createor_info: ZhihuCreator = await self.zhihu_client.get_creator_info(
                 url_token=user_url_token
@@ -326,6 +333,8 @@ class ZhihuCrawler(AbstractCrawler):
 
             # Get all comments of the creator's contents
             await self.batch_get_content_comments(all_content_list)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_url_token])
 
     async def get_note_detail(
         self, full_note_url: str, semaphore: asyncio.Semaphore
