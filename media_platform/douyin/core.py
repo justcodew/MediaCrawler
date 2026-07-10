@@ -189,6 +189,9 @@ class DouYinCrawler(AbstractCrawler):
     async def get_specified_awemes(self):
         """Get the information and comments of the specified post from URLs or IDs"""
         utils.logger.info("[DouYinCrawler.get_specified_awemes] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         aweme_id_list = []
         for video_url in config.DY_SPECIFIED_ID_LIST:
             try:
@@ -206,6 +209,10 @@ class DouYinCrawler(AbstractCrawler):
                         utils.logger.error(f"[DouYinCrawler.get_specified_awemes] Failed to resolve short link: {video_url}")
                         continue
 
+                # 断点续爬:跳过已处理的 aweme_id
+                if ckpt.is_processed(scope, video_info.aweme_id):
+                    utils.logger.info(f"[DouYinCrawler.get_specified_awemes] Skip processed: {video_info.aweme_id}")
+                    continue
                 aweme_id_list.append(video_info.aweme_id)
                 utils.logger.info(f"[DouYinCrawler.get_specified_awemes] Parsed aweme ID: {video_info.aweme_id} from {video_url}")
             except ValueError as e:
@@ -215,11 +222,15 @@ class DouYinCrawler(AbstractCrawler):
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list = [self.get_aweme_detail(aweme_id=aweme_id, semaphore=semaphore) for aweme_id in aweme_id_list]
         aweme_details = await asyncio.gather(*task_list)
+        done_ids = []
         for aweme_detail in aweme_details:
             if aweme_detail is not None:
                 await douyin_store.update_douyin_aweme(aweme_item=aweme_detail)
                 await self.get_aweme_media(aweme_item=aweme_detail)
+                done_ids.append(aweme_detail.get("aweme_id", ""))
         await self.batch_get_note_comments(aweme_id_list)
+        # 断点续爬:记录本次处理的 aweme_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_aweme_detail(self, aweme_id: str, semaphore: asyncio.Semaphore) -> Any:
         """Get note detail"""

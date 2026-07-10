@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { analysisApi, type RemixResult } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
  * 需要后端配置 LLM_API_KEY(详见 .env.example)
  */
 export function AnalysisPanel() {
+  const { t } = useTranslation('analysis')
   const [platform, setPlatform] = useState('xhs')
   const [platforms, setPlatforms] = useState<string[]>([])
   const [noteId, setNoteId] = useState('')
@@ -29,7 +31,7 @@ export function AnalysisPanel() {
         setPlatform(res.data.platforms[0])
       }
     } catch (e: any) {
-      toast.error('加载平台失败: ' + (e?.message || ''))
+      toast.error(t('toast.loadPlatformsFailed') + ': ' + (e?.message || ''))
     }
   }
 
@@ -44,14 +46,14 @@ export function AnalysisPanel() {
       }
       const res = await analysisApi.remix(req)
       if (!res.data.configured) {
-        toast.error('LLM 未配置,请在 .env 设置 LLM_API_KEY')
+        toast.error(t('toast.notConfigured'))
         return
       }
       setResults(res.data.results)
-      toast.success(`分析完成,共 ${res.data.results.length} 条`)
+      toast.success(t('toast.done', { count: res.data.results.length }))
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || ''
-      toast.error('分析失败: ' + msg)
+      toast.error(t('toast.analyzeFailed') + ': ' + msg)
     } finally {
       setLoading(false)
     }
@@ -61,16 +63,16 @@ export function AnalysisPanel() {
     <Card className="glass-panel border-cyber-accent/20">
       <CardHeader>
         <CardTitle className="text-cyber-text-primary flex items-center gap-2">
-          <span>🤖 内容分析 Agent</span>
+          <span>{t('panel.title')}</span>
           <Button variant="outline" size="sm" onClick={loadPlatforms} disabled={loading}>
-            刷新平台
+            {t('panel.refreshPlatforms')}
           </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
-            <Label className="text-cyber-text-secondary">平台</Label>
+            <Label className="text-cyber-text-secondary">{t('field.platform')}</Label>
             <select
               className="bg-cyber-bg border border-cyber-accent/30 rounded px-2 py-1 text-cyber-text-primary"
               value={platform}
@@ -83,17 +85,17 @@ export function AnalysisPanel() {
             </select>
           </div>
           <div className="space-y-1">
-            <Label className="text-cyber-text-secondary">指定 note_id(可选)</Label>
+            <Label className="text-cyber-text-secondary">{t('field.noteId')}</Label>
             <Input
               className="w-64"
               value={noteId}
               onChange={(e) => setNoteId(e.target.value)}
-              placeholder="留空则批量分析"
+              placeholder={t('field.noteIdPlaceholder')}
             />
           </div>
           {!noteId.trim() && (
             <div className="space-y-1">
-              <Label className="text-cyber-text-secondary">批量条数</Label>
+              <Label className="text-cyber-text-secondary">{t('field.limit')}</Label>
               <Input
                 type="number"
                 min={1}
@@ -105,14 +107,14 @@ export function AnalysisPanel() {
             </div>
           )}
           <Button onClick={runRemix} disabled={loading}>
-            {loading ? '分析中...' : '开始拆解'}
+            {loading ? t('action.starting') : t('action.start')}
           </Button>
         </div>
 
         <ScrollArea className="h-[420px] rounded border border-cyber-accent/10 p-2">
           {results.length === 0 ? (
             <p className="text-cyber-text-secondary text-sm py-8 text-center">
-              选择平台并点击「开始拆解」,生成爆款元素分析报告
+              {t('result.empty')}
             </p>
           ) : (
             <div className="space-y-4">
@@ -127,6 +129,9 @@ export function AnalysisPanel() {
                     <pre className="text-xs text-cyber-text-secondary whitespace-pre-wrap font-mono bg-cyber-bg/50 rounded p-2">
                       {r.content_text}
                     </pre>
+                    <div className="text-xs font-semibold text-cyber-text-primary py-1">
+                      {t('result.reportLabel')}
+                    </div>
                     <div className="text-xs text-cyber-text-primary whitespace-pre-wrap leading-relaxed">
                       {r.report}
                     </div>

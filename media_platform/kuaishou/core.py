@@ -191,10 +191,17 @@ class KuaishouCrawler(AbstractCrawler):
     async def get_specified_videos(self):
         """Get the information and comments of the specified post"""
         utils.logger.info("[KuaishouCrawler.get_specified_videos] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         video_ids = []
         for video_url in config.KS_SPECIFIED_ID_LIST:
             try:
                 video_info = parse_video_info_from_url(video_url)
+                # 断点续爬:跳过已处理
+                if ckpt.is_processed(scope, video_info.video_id):
+                    utils.logger.info(f"[KuaishouCrawler.get_specified_videos] Skip processed: {video_info.video_id}")
+                    continue
                 video_ids.append(video_info.video_id)
                 utils.logger.info(f"Parsed video ID: {video_info.video_id} from {video_url}")
             except ValueError as e:
@@ -207,10 +214,14 @@ class KuaishouCrawler(AbstractCrawler):
             for video_id in video_ids
         ]
         video_details = await asyncio.gather(*task_list)
+        done_ids = []
         for video_detail in video_details:
             if video_detail is not None:
                 await kuaishou_store.update_kuaishou_video(video_detail)
+                done_ids.append(video_detail.get("photo", {}).get("id", ""))
         await self.batch_get_video_comments(video_ids)
+        # 断点续爬:记录本次处理的 video_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_video_info_task(
         self, video_id: str, semaphore: asyncio.Semaphore

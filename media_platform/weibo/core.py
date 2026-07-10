@@ -200,13 +200,25 @@ class WeiboCrawler(AbstractCrawler):
         get specified notes info
         :return:
         """
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
+        # 断点续爬:过滤已处理
+        todo_ids = [nid for nid in config.WEIBO_SPECIFIED_ID_LIST if not ckpt.is_processed(scope, nid)]
+        skipped = len(config.WEIBO_SPECIFIED_ID_LIST) - len(todo_ids)
+        if skipped:
+            utils.logger.info(f"[WeiboCrawler.get_specified_notes] Skip {skipped} processed notes")
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
-        task_list = [self.get_note_info_task(note_id=note_id, semaphore=semaphore) for note_id in config.WEIBO_SPECIFIED_ID_LIST]
+        task_list = [self.get_note_info_task(note_id=note_id, semaphore=semaphore) for note_id in todo_ids]
         video_details = await asyncio.gather(*task_list)
+        done_ids = []
         for note_item in video_details:
             if note_item:
                 await weibo_store.update_weibo_note(note_item)
-        await self.batch_get_notes_comments(config.WEIBO_SPECIFIED_ID_LIST)
+                done_ids.append(note_item.get("id", ""))
+        await self.batch_get_notes_comments(todo_ids)
+        # 断点续爬:记录本次处理的 note_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_note_info_task(self, note_id: str, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """

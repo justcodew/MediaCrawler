@@ -397,10 +397,17 @@ class BilibiliCrawler(AbstractCrawler):
         :return:
         """
         utils.logger.info("[BilibiliCrawler.get_specified_videos] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         bvids_list = []
         for video_url in video_url_list:
             try:
                 video_info = parse_video_info_from_url(video_url)
+                # 断点续爬:跳过已处理
+                if ckpt.is_processed(scope, video_info.video_id):
+                    utils.logger.info(f"[BilibiliCrawler.get_specified_videos] Skip processed: {video_info.video_id}")
+                    continue
                 bvids_list.append(video_info.video_id)
                 utils.logger.info(f"[BilibiliCrawler.get_specified_videos] Parsed video ID: {video_info.video_id} from {video_url}")
             except ValueError as e:
@@ -411,6 +418,7 @@ class BilibiliCrawler(AbstractCrawler):
         task_list = [self.get_video_info_task(aid=0, bvid=video_id, semaphore=semaphore) for video_id in bvids_list]
         video_details = await asyncio.gather(*task_list)
         video_aids_list = []
+        done_ids = []
         for video_detail in video_details:
             if video_detail is not None:
                 video_item_view: Dict = video_detail.get("View")
@@ -420,7 +428,10 @@ class BilibiliCrawler(AbstractCrawler):
                 await bilibili_store.update_bilibili_video(video_detail)
                 await bilibili_store.update_up_info(video_detail)
                 await self.get_bilibili_video(video_detail, semaphore)
+                done_ids.append(video_info.video_id if video_item_view else "")
         await self.batch_get_video_comments(video_aids_list)
+        # 断点续爬:记录本次处理的 video_id
+        await ckpt.save_page(scope, 1, [i for i in done_ids if i])
 
     async def get_video_info_task(self, aid: int, bvid: str, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """

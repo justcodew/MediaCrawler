@@ -391,10 +391,19 @@ class ZhihuCrawler(AbstractCrawler):
         Returns:
 
         """
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         get_note_detail_task_list = []
+        processed_urls = []
         for full_note_url in config.ZHIHU_SPECIFIED_ID_LIST:
             # remove query params
             full_note_url = full_note_url.split("?")[0]
+            # 断点续爬:跳过已处理
+            if ckpt.is_processed(scope, full_note_url):
+                utils.logger.info(f"[ZhihuCrawler.get_specified_notes] Skip processed: {full_note_url}")
+                continue
+            processed_urls.append(full_note_url)
             crawler_task = self.get_note_detail(
                 full_note_url=full_note_url,
                 semaphore=asyncio.Semaphore(config.MAX_CONCURRENCY_NUM),
@@ -406,7 +415,7 @@ class ZhihuCrawler(AbstractCrawler):
         for index, note_detail in enumerate(note_details):
             if not note_detail:
                 utils.logger.info(
-                    f"[ZhihuCrawler.get_specified_notes] Note {config.ZHIHU_SPECIFIED_ID_LIST[index]} not found"
+                    f"[ZhihuCrawler.get_specified_notes] Note {processed_urls[index]} not found"
                 )
                 continue
 
@@ -415,6 +424,8 @@ class ZhihuCrawler(AbstractCrawler):
             await zhihu_store.update_zhihu_content(note_detail)
 
         await self.batch_get_content_comments(need_get_comment_notes)
+        # 断点续爬:记录本次处理的 URL
+        await ckpt.save_page(scope, 1, processed_urls)
 
     async def create_zhihu_client(self, httpx_proxy: Optional[str]) -> ZhiHuClient:
         """Create zhihu client"""

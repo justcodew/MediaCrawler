@@ -42,6 +42,14 @@ dependencies = [
     "xhshow>=0.1.9",
 ]
 
+# 可选依赖:AI 内容分析 Agent 的 LangGraph 编排
+# 安装方式: uv sync --extra agent
+# 未安装时 Agent 自动 fallback 到纯 async 实现,功能不受影响。
+[project.optional-dependencies]
+agent = [
+    "langgraph>=0.2.0",
+]
+
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true

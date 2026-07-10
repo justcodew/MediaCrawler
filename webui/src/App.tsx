@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Toaster } from 'sonner'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MainContent } from '@/components/layout/MainContent'
@@ -9,6 +10,7 @@ import { EnvironmentCheck, isEnvChecked } from '@/components/env/EnvironmentChec
 import { LicenseDisclaimer, isLicenseAccepted } from '@/components/license/LicenseDisclaimer'
 
 function App() {
+  const { t } = useTranslation('analysis')
   // Initialize by checking localStorage if license has been accepted
   const [licenseAccepted, setLicenseAccepted] = useState(() => isLicenseAccepted())
   // Initialize by checking localStorage if env check has passed
@@ -54,13 +56,13 @@ function App() {
             className={`px-3 py-1 rounded text-sm border ${view === 'crawler' ? 'border-cyber-accent bg-cyber-accent/10 text-cyber-text-primary' : 'border-cyber-accent/20 text-cyber-text-secondary'}`}
             onClick={() => setView('crawler')}
           >
-            🕷️ 爬虫控制台
+            {t('view.crawler')}
           </button>
           <button
             className={`px-3 py-1 rounded text-sm border ${view === 'analysis' ? 'border-cyber-accent bg-cyber-accent/10 text-cyber-text-primary' : 'border-cyber-accent/20 text-cyber-text-secondary'}`}
             onClick={() => setView('analysis')}
           >
-            🤖 内容分析
+            {t('view.analysis')}
           </button>
         </div>
 
