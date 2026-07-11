@@ -285,6 +285,40 @@ class ZhihuContent(Base):
     add_ts = Column(BigInteger, comment='添加时间戳')
     last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
 
+
+class DoubanNote(Base):
+    __tablename__ = 'douban_note'
+    id = Column(Integer, primary_key=True, comment='主键ID')
+    topic_id = Column(String(64), nullable=False, index=True, unique=True, comment='帖子ID')
+    title = Column(Text, comment='标题')
+    desc = Column(Text, comment='正文')
+    creator_hash = Column(String(64), index=True, comment='创作者匿名哈希')
+    nickname = Column(Text, comment='用户昵称(已脱敏)')
+    group_id = Column(String(64), index=True, comment='小组ID')
+    group_name = Column(Text, comment='小组名')
+    reply_count = Column(Integer, default=0, comment='回复数')
+    like_count = Column(Integer, default=0, comment='喜欢数')
+    create_date_time = Column(String(32), index=True, comment='发布时间')
+    note_url = Column(Text, comment='帖子URL')
+    source_keyword = Column(Text, comment='来源关键词')
+    add_ts = Column(BigInteger, comment='添加时间戳')
+    last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
+
+
+class DoubanNoteComment(Base):
+    __tablename__ = 'douban_note_comment'
+    id = Column(Integer, primary_key=True, comment='主键ID')
+    comment_id = Column(String(64), index=True, comment='评论ID')
+    topic_id = Column(String(64), index=True, comment='帖子ID')
+    content = Column(Text, comment='评论内容')
+    creator_hash = Column(String(64), index=True, comment='创作者匿名哈希')
+    nickname = Column(Text, comment='用户昵称(已脱敏)')
+    create_date_time = Column(String(32), comment='发布时间')
+    like_count = Column(Integer, default=0, comment='点赞数')
+    add_ts = Column(BigInteger, comment='添加时间戳')
+    last_modify_ts = Column(BigInteger, comment='最后修改时间戳')
+
+
 class ZhihuComment(Base):
     __tablename__ = 'zhihu_comment'
     id = Column(Integer, primary_key=True, comment='主键ID')
