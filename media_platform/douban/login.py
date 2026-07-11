@@ -41,6 +41,10 @@ class DoubanLogin(AbstractLogin):
         else:
             raise ValueError(f"不支持的登录方式: {self.login_type}")
 
+    async def login_by_mobile(self) -> None:
+        """豆瓣暂不支持手机号登录(预留)"""
+        raise NotImplementedError("豆瓣暂不支持手机号登录,请用 qrcode 或 cookie 方式")
+
     async def login_by_qrcode(self) -> None:
         """CDP 模式下,用户在浏览器里手动登录(扫码或账密)。
 
