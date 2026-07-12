@@ -236,6 +236,20 @@ class CrawlerManager:
 
         cmd.extend(["--headless", "true" if config.headless else "false"])
 
+        # Pro 功能开关(MediaCrawler 社区增强版)
+        if config.enable_sign_service:
+            cmd.extend(["--enable_sign_service", "yes"])
+        if config.resume_task_id:
+            cmd.extend(["--resume", config.resume_task_id])
+        elif config.enable_resume:
+            cmd.extend(["--enable_resume", "yes"])
+        if config.enable_account_pool or config.accounts_file:
+            cmd.extend(["--enable_account_pool", "yes"])
+            if config.accounts_file:
+                cmd.extend(["--accounts_file", config.accounts_file])
+        if config.enable_headless_api:
+            cmd.extend(["--enable_headless_api", "yes"])
+
         return cmd
 
     async def _read_output(self):

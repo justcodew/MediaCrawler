@@ -61,6 +61,7 @@ class BilibiliCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self):
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.bilibili.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
@@ -190,10 +191,13 @@ class BilibiliCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < bili_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = bili_limit_count
         start_page = config.START_PAGE  # start page number
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Current search keyword: {keyword}")
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (page - start_page + 1) * bili_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 if page < start_page:
                     utils.logger.info(f"[BilibiliCrawler.search_by_keywords] Skip page: {page}")
@@ -230,6 +234,8 @@ class BilibiliCrawler(AbstractCrawler):
                         await bilibili_store.update_up_info(video_item)
                         await self.get_bilibili_video(video_item, semaphore)
                 page += 1
+                # 断点续爬:记录本页完成
+                await ckpt.save_page(keyword, page - 1, video_id_list)
 
                 # Sleep after page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -391,10 +397,17 @@ class BilibiliCrawler(AbstractCrawler):
         :return:
         """
         utils.logger.info("[BilibiliCrawler.get_specified_videos] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         bvids_list = []
         for video_url in video_url_list:
             try:
                 video_info = parse_video_info_from_url(video_url)
+                # 断点续爬:跳过已处理
+                if ckpt.is_processed(scope, video_info.video_id):
+                    utils.logger.info(f"[BilibiliCrawler.get_specified_videos] Skip processed: {video_info.video_id}")
+                    continue
                 bvids_list.append(video_info.video_id)
                 utils.logger.info(f"[BilibiliCrawler.get_specified_videos] Parsed video ID: {video_info.video_id} from {video_url}")
             except ValueError as e:
@@ -405,6 +418,7 @@ class BilibiliCrawler(AbstractCrawler):
         task_list = [self.get_video_info_task(aid=0, bvid=video_id, semaphore=semaphore) for video_id in bvids_list]
         video_details = await asyncio.gather(*task_list)
         video_aids_list = []
+        done_ids = []
         for video_detail in video_details:
             if video_detail is not None:
                 video_item_view: Dict = video_detail.get("View")
@@ -414,7 +428,10 @@ class BilibiliCrawler(AbstractCrawler):
                 await bilibili_store.update_bilibili_video(video_detail)
                 await bilibili_store.update_up_info(video_detail)
                 await self.get_bilibili_video(video_detail, semaphore)
+                done_ids.append(video_info.video_id if video_item_view else "")
         await self.batch_get_video_comments(video_aids_list)
+        # 断点续爬:记录本次处理的 video_id
+        await ckpt.save_page(scope, 1, [i for i in done_ids if i])
 
     async def get_video_info_task(self, aid: int, bvid: str, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """
@@ -504,7 +521,9 @@ class BilibiliCrawler(AbstractCrawler):
         if config.SAVE_LOGIN_STATE:
             # feat issue #14
             # we will save login state to avoid login every time
-            user_data_dir = os.path.join(os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM)  # type: ignore
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
+            user_data_dir = os.path.join(os.getcwd(), "browser_data", dir_name)
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -541,6 +560,7 @@ class BilibiliCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information
@@ -614,12 +634,20 @@ class BilibiliCrawler(AbstractCrawler):
         utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Crawling the details of creators")
         utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsing creator URLs...")
 
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         creator_id_list = []
         for creator_url in creator_url_list:
             try:
                 creator_info = parse_creator_info_from_url(creator_url)
-                creator_id_list.append(int(creator_info.creator_id))
-                utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsed creator ID: {creator_info.creator_id} from {creator_url}")
+                cid = str(creator_info.creator_id)
+                # 断点续爬:跳过已处理的 creator
+                if ckpt.is_processed(scope, cid):
+                    utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Skip processed creator: {cid}")
+                    continue
+                creator_id_list.append(int(cid))
+                utils.logger.info(f"[BilibiliCrawler.get_all_creator_details] Parsed creator ID: {cid} from {creator_url}")
             except ValueError as e:
                 utils.logger.error(f"[BilibiliCrawler.get_all_creator_details] Failed to parse creator URL: {e}")
                 continue
@@ -636,6 +664,8 @@ class BilibiliCrawler(AbstractCrawler):
             utils.logger.warning(f"[BilibiliCrawler.get_all_creator_details] error in the task list. The creator will not be included. {e}")
 
         await asyncio.gather(*task_list)
+        # 断点续爬:记录已处理的 creator
+        await ckpt.save_page(scope, 1, [str(c) for c in creator_id_list])
 
     async def get_creator_details(self, creator_id: int, semaphore: asyncio.Semaphore):
         """

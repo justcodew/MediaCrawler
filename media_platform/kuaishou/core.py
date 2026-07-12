@@ -55,6 +55,7 @@ class KuaishouCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self):
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.kuaishou.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
@@ -133,13 +134,16 @@ class KuaishouCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < ks_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = ks_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
-            search_session_id = ""
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[KuaishouCrawler.search] Current search keyword: {keyword}"
             )
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            search_session_id = scope_state.search_id
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (
                 page - start_page + 1
             ) * ks_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
@@ -175,6 +179,8 @@ class KuaishouCrawler(AbstractCrawler):
 
                 # batch fetch video comments
                 page += 1
+                # 断点续爬:记录本页完成
+                await ckpt.save_page(keyword, page - 1, video_id_list, search_id=search_session_id)
 
                 # Sleep after page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -185,10 +191,17 @@ class KuaishouCrawler(AbstractCrawler):
     async def get_specified_videos(self):
         """Get the information and comments of the specified post"""
         utils.logger.info("[KuaishouCrawler.get_specified_videos] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         video_ids = []
         for video_url in config.KS_SPECIFIED_ID_LIST:
             try:
                 video_info = parse_video_info_from_url(video_url)
+                # 断点续爬:跳过已处理
+                if ckpt.is_processed(scope, video_info.video_id):
+                    utils.logger.info(f"[KuaishouCrawler.get_specified_videos] Skip processed: {video_info.video_id}")
+                    continue
                 video_ids.append(video_info.video_id)
                 utils.logger.info(f"Parsed video ID: {video_info.video_id} from {video_url}")
             except ValueError as e:
@@ -201,10 +214,14 @@ class KuaishouCrawler(AbstractCrawler):
             for video_id in video_ids
         ]
         video_details = await asyncio.gather(*task_list)
+        done_ids = []
         for video_detail in video_details:
             if video_detail is not None:
                 await kuaishou_store.update_kuaishou_video(video_detail)
+                done_ids.append(video_detail.get("photo", {}).get("id", ""))
         await self.batch_get_video_comments(video_ids)
+        # 断点续爬:记录本次处理的 video_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_video_info_task(
         self, video_id: str, semaphore: asyncio.Semaphore
@@ -338,9 +355,11 @@ class KuaishouCrawler(AbstractCrawler):
             "[KuaishouCrawler.launch_browser] Begin create browser context ..."
         )
         if config.SAVE_LOGIN_STATE:
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
             user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
+                os.getcwd(), "browser_data", dir_name
+            )
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -375,6 +394,7 @@ class KuaishouCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information
@@ -398,12 +418,20 @@ class KuaishouCrawler(AbstractCrawler):
         utils.logger.info(
             "[KuaiShouCrawler.get_creators_and_videos] Begin get kuaishou creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.KS_CREATOR_ID_LIST:
             try:
                 # Parse creator URL to get user_id
                 creator_info: CreatorUrlInfo = parse_creator_info_from_url(creator_url)
                 utils.logger.info(f"[KuaiShouCrawler.get_creators_and_videos] Parse creator URL info: {creator_info}")
                 user_id = creator_info.user_id
+
+                # 断点续爬:跳过已处理的 creator
+                if ckpt.is_processed(scope, user_id):
+                    utils.logger.info(f"[KuaiShouCrawler.get_creators_and_videos] Skip processed creator: {user_id}")
+                    continue
 
                 # get creator detail info from web html content
                 createor_info: Dict = await self.ks_client.get_creator_info(user_id=user_id)
@@ -424,6 +452,8 @@ class KuaishouCrawler(AbstractCrawler):
                 video_item.get("photo", {}).get("id") for video_item in all_video_list
             ]
             await self.batch_get_video_comments(video_ids)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_id])
 
     async def fetch_creator_video_detail(self, video_list: List[Dict]):
         """

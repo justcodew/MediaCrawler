@@ -100,10 +100,15 @@ class CDPBrowserManager:
         playwright_proxy: Optional[Dict] = None,
         user_agent: Optional[str] = None,
         headless: bool = False,
+        account=None,
     ) -> BrowserContext:
         """
-        Launch browser and connect via CDP
+        Launch browser and connect via CDP.
+
+        account: 可选的多账号信息(crawler._account_info),传入后按账号隔离 user_data_dir。
         """
+        if account is not None:
+            self._account_info = account
         try:
             if config.CDP_CONNECT_EXISTING:
                 # Connect to an existing browser that already has remote debugging enabled
@@ -254,10 +259,17 @@ class CDPBrowserManager:
         # Set user data directory (if save login state is enabled)
         user_data_dir = None
         if config.SAVE_LOGIN_STATE:
+            # 多账号隔离:若设置了 _account_info,按账号隔离目录
+            account = getattr(self, "_account_info", None)
+            if account is not None:
+                from tools.crawler_util import resolve_user_data_dir_name
+                dir_name = resolve_user_data_dir_name(config.PLATFORM, account)
+            else:
+                dir_name = config.USER_DATA_DIR % config.PLATFORM  # type: ignore
             user_data_dir = os.path.join(
                 os.getcwd(),
                 "browser_data",
-                f"cdp_{config.USER_DATA_DIR % config.PLATFORM}",
+                f"cdp_{dir_name}",
             )
             os.makedirs(user_data_dir, exist_ok=True)
             utils.logger.info(f"[CDPBrowserManager] User data directory: {user_data_dir}")

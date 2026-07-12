@@ -11,6 +11,12 @@ export interface CrawlerConfig {
   save_option: string
   cookies: string
   headless: boolean
+  // Pro 功能开关(MediaCrawler 社区增强版)
+  enable_sign_service: boolean
+  enable_resume: boolean
+  enable_account_pool: boolean
+  accounts_file: string
+  enable_headless_api: boolean
 }
 
 export interface CrawlerStatus {

@@ -53,6 +53,7 @@ class TieBaCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self) -> None:
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://tieba.baidu.com"
         self.cookie_urls = [self.index_url]
         self.user_agent = utils.get_user_agent()
@@ -158,12 +159,15 @@ class TieBaCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < tieba_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = tieba_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[BaiduTieBaCrawler.search] Current search keyword: {keyword}"
             )
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (
                 page - start_page + 1
             ) * tieba_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
@@ -192,9 +196,10 @@ class TieBaCrawler(AbstractCrawler):
                     utils.logger.info(
                         f"[BaiduTieBaCrawler.search] Note list len: {len(notes_list)}"
                     )
-                    await self.get_specified_notes(
-                        note_id_list=[note_detail.note_id for note_detail in notes_list]
-                    )
+                    note_ids = [n.note_id for n in notes_list]
+                    await self.get_specified_notes(note_id_list=note_ids)
+                    # 断点续爬:记录本页完成
+                    await ckpt.save_page(keyword, page, note_ids)
 
                     # Sleep after page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -257,6 +262,17 @@ class TieBaCrawler(AbstractCrawler):
         """
         if note_id_list is None:
             note_id_list = config.TIEBA_SPECIFIED_ID_LIST
+        ckpt = self.checkpoint_manager
+        # 仅在 detail 模式(note_id_list 来自 config)启用断点去重,避免 search 模式误触发
+        is_detail_mode = note_id_list is config.TIEBA_SPECIFIED_ID_LIST
+        scope = "__detail__"
+        if is_detail_mode:
+            await ckpt.begin_scope(scope)
+            # 断点续爬:过滤已处理
+            before = len(note_id_list)
+            note_id_list = [nid for nid in note_id_list if not ckpt.is_processed(scope, nid)]
+            if before != len(note_id_list):
+                utils.logger.info(f"[TieBaCrawler.get_specified_notes] Skip {before - len(note_id_list)} processed notes")
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list = [
             self.get_note_detail_async_task(note_id=note_id, semaphore=semaphore)
@@ -264,11 +280,16 @@ class TieBaCrawler(AbstractCrawler):
         ]
         note_details = await asyncio.gather(*task_list)
         note_details_model: List[TiebaNote] = []
+        done_ids = []
         for note_detail in note_details:
             if note_detail is not None:
                 note_details_model.append(note_detail)
                 await tieba_store.update_tieba_note(note_detail)
+                done_ids.append(note_detail.note_id)
         await self.batch_get_note_comments(note_details_model)
+        # 断点续爬:detail 模式记录本次处理的 note_id
+        if is_detail_mode:
+            await ckpt.save_page(scope, 1, done_ids)
 
     async def get_note_detail_async_task(
         self, note_id: str, semaphore: asyncio.Semaphore
@@ -369,7 +390,14 @@ class TieBaCrawler(AbstractCrawler):
         utils.logger.info(
             "[TieBaCrawler.get_creators_and_notes] Begin get tieba creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.TIEBA_CREATOR_URL_LIST:
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, creator_url):
+                utils.logger.info(f"[TieBaCrawler.get_creators_and_notes] Skip processed creator: {creator_url}")
+                continue
             creator_info: TiebaCreator = await self.tieba_client.get_creator_info_by_url(
                 creator_url=creator_url
             )
@@ -393,6 +421,8 @@ class TieBaCrawler(AbstractCrawler):
                 )
 
                 await self.batch_get_note_comments(all_notes_list)
+                # 断点续爬:记录该 creator 已处理
+                await ckpt.save_page(scope, 1, [creator_url])
 
             else:
                 utils.logger.error(
@@ -618,9 +648,11 @@ class TieBaCrawler(AbstractCrawler):
         if config.SAVE_LOGIN_STATE:
             # feat issue #14
             # we will save login state to avoid login every time
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
             user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
+                os.getcwd(), "browser_data", dir_name
+            )
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -655,6 +687,7 @@ class TieBaCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

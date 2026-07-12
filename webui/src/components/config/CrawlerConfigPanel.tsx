@@ -386,6 +386,71 @@ export function CrawlerConfigPanel() {
             </div>
           </div>
         </Section>
+
+        {/* Pro 功能开关(MediaCrawler 社区增强版) */}
+        <Section
+          title={t('section.proConfig.title', 'Pro 功能')}
+          description={t('section.proConfig.description', '社区增强版功能(默认关闭)')}
+          icon={Database}
+        >
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-3 rounded-lg border border-cyber-border-subtle bg-cyber-bg-tertiary/30 p-2.5">
+              <Checkbox
+                checked={config.enable_sign_service}
+                onCheckedChange={(checked) => updateConfig({ enable_sign_service: checked === true })}
+                disabled={isDisabled}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-cyber-text-primary">{t('field.signService', '签名服务')}</p>
+                <p className="text-[10px] text-cyber-text-muted leading-snug">{t('field.signServiceHint', '通过独立签名服务签名,降低 Node 依赖')}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border border-cyber-border-subtle bg-cyber-bg-tertiary/30 p-2.5">
+              <Checkbox
+                checked={config.enable_resume}
+                onCheckedChange={(checked) => updateConfig({ enable_resume: checked === true })}
+                disabled={isDisabled}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-cyber-text-primary">{t('field.resume', '断点续爬')}</p>
+                <p className="text-[10px] text-cyber-text-muted leading-snug">{t('field.resumeHint', '中断后可从上次进度继续')}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border border-cyber-border-subtle bg-cyber-bg-tertiary/30 p-2.5">
+              <Checkbox
+                checked={config.enable_headless_api}
+                onCheckedChange={(checked) => updateConfig({ enable_headless_api: checked === true })}
+                disabled={isDisabled}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-cyber-text-primary">{t('field.headlessApi', '脱浏览器模式')}</p>
+                <p className="text-[10px] text-cyber-text-muted leading-snug">{t('field.headlessApiHint', 'xhs/zhihu 有 cookie 时跳过浏览器(xhs/zhihu)')}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border border-cyber-border-subtle bg-cyber-bg-tertiary/30 p-2.5">
+              <Checkbox
+                checked={config.enable_account_pool}
+                onCheckedChange={(checked) => updateConfig({ enable_account_pool: checked === true })}
+                disabled={isDisabled}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-mono text-cyber-text-primary">{t('field.accountPool', '多账号池')}</p>
+                <p className="text-[10px] text-cyber-text-muted leading-snug">{t('field.accountPoolHint', '从账号池轮转使用多账号')}</p>
+              </div>
+            </div>
+            {config.enable_account_pool && (
+              <Field label={t('field.accountsFile', '账号文件')}>
+                <Input
+                  value={config.accounts_file}
+                  onChange={(e) => updateConfig({ accounts_file: e.target.value })}
+                  placeholder={t('field.accountsFilePlaceholder', 'accounts.csv 路径(可选)')}
+                  disabled={isDisabled}
+                  className="h-9 text-xs font-mono"
+                />
+              </Field>
+            )}
+          </div>
+        </Section>
       </div>
 
       {/* Row 2: Start/Stop Button - Full Width */}

@@ -32,27 +32,31 @@ from .xhs_sign import get_trace_id
 
 
 def _patch_xhshow_a3_hash():
-    """
-    修复 xhshow 库 build_payload_array 中 a3_hash 计算的 bug。
-    xhshow 原实现对所有请求使用 MD5(extract_api_path(content_string)) 计算 a3_hash,
-    其中 extract_api_path 会同时去掉 "?" 后的查询参数和 "{" 后的 JSON body。
-    但浏览器的实际行为是:
-      - POST: a3 使用 MD5(api_path), 即去掉 JSON body 后的路径 → 原实现正确
-      - GET:  a3 使用 MD5(完整 URL + 查询参数) → 原实现错误, 因为也去掉了查询参数
-    修复方式: 对 GET 请求(content_string 不含 "{"), 使用完整 content_string 的 MD5;
-              对 POST 请求(content_string 含 "{"), 保持原始行为。
-    相关 issue: https://github.com/Cloxl/xhshow/issues/104
-    """
-    from xhshow.core.crypto import CryptoProcessor
+    """修复旧版 xhshow(无 sign_headers_get)的 a3_hash GET bug。
 
+    背景:xhshow 早期版本 build_payload_array 对 GET 请求也去掉了查询参数,
+    导致 a3_hash 计算错误(issue #104)。新版 xhshow 已提供 sign_headers_get
+    并修复该 bug,无需本 patch。
+
+    策略:仅在旧版(没有 sign_headers_get)上应用 patch;新版直接跳过。
+    用 *args/**kwargs 透传以适配不同签名。
+    """
+    from xhshow import Xhshow
+    # 新版已有 sign_headers_get(a3 bug 已官方修复),无需 patch
+    if hasattr(Xhshow, "sign_headers_get"):
+        return
+
+    from xhshow.core.crypto import CryptoProcessor
     _original_build = CryptoProcessor.build_payload_array
 
-    def _patched_build(self, hex_parameter, a1_value, app_identifier="xhs-pc-web",
-                       string_param="", timestamp=None, sign_state=None):
-        payload = _original_build(self, hex_parameter, a1_value, app_identifier,
-                                  string_param, timestamp, sign_state)
-        # 仅当 content_string 不含 "{" 时修复 (即 GET 请求)
-        if "{" not in string_param:
+    def _patched_build(self, *args, **kwargs):
+        payload = _original_build(self, *args, **kwargs)
+        string_param = kwargs.get("string_param", "")
+        if not string_param and len(args) >= 4:
+            # 旧版位置参数: hex_parameter, a1_value, app_identifier, string_param
+            string_param = args[3]
+        # 仅 GET 请求(content_string 不含 "{")修复
+        if string_param and "{" not in string_param:
             correct_md5_hex = hashlib.md5(string_param.encode("utf-8")).hexdigest()
             correct_md5_bytes = [int(correct_md5_hex[i:i + 2], 16) for i in range(0, 32, 2)]
             seed_byte = payload[4]
@@ -65,7 +69,7 @@ def _patch_xhshow_a3_hash():
     CryptoProcessor.build_payload_array = _patched_build
 
 
-# 启动时应用 monkey-patch
+# 启动时应用 monkey-patch(新版 xhshow 会直接跳过)
 _patch_xhshow_a3_hash()
 
 
@@ -140,33 +144,43 @@ def sign_with_xhshow(
             payload=data if isinstance(data, dict) else {},
         )
     else:
-        # GET 请求: 构建完整的 content_string 用于签名
-        content_string = _build_sign_string(uri, data, method)
-        cookie_dict = xhshow_client._parse_cookies(cookie_str)
-        a1_value = cookie_dict.get("a1", "")
+        # GET 请求:优先用新版 xhshow 的 sign_headers_get(自带 a3 修复),
+        # 旧版无此方法时回退到手动构建 content_string 签名。
+        if hasattr(xhshow_client, "sign_headers_get"):
+            params = data if isinstance(data, dict) else None
+            headers = xhshow_client.sign_headers_get(
+                uri=uri,
+                cookies=cookie_str,
+                params=params or {},
+            )
+        else:
+            # 旧版 xhshow:手动构建 content_string 用于签名
+            content_string = _build_sign_string(uri, data, method)
+            cookie_dict = xhshow_client._parse_cookies(cookie_str)
+            a1_value = cookie_dict.get("a1", "")
 
-        ts = time.time()
-        d_value = hashlib.md5(content_string.encode("utf-8")).hexdigest()
+            ts = time.time()
+            d_value = hashlib.md5(content_string.encode("utf-8")).hexdigest()
 
-        payload_array = xhshow_client.crypto_processor.build_payload_array(
-            d_value, a1_value, "xhs-pc-web", content_string, ts
-        )
-        xor_result = xhshow_client.crypto_processor.bit_ops.xor_transform_array(payload_array)
-        config = xhshow_client.config
-        x3_b64 = xhshow_client.crypto_processor.b64encoder.encode_x3(
-            xor_result[:config.PAYLOAD_LENGTH]
-        )
-        sig_data = config.SIGNATURE_DATA_TEMPLATE.copy()
-        sig_data["x3"] = config.X3_PREFIX + x3_b64
-        x_s = config.XYS_PREFIX + xhshow_client.crypto_processor.b64encoder.encode(
-            json.dumps(sig_data, separators=(",", ":"), ensure_ascii=False)
-        )
-        headers = {
-            "x-s": x_s,
-            "x-s-common": xhshow_client.sign_xs_common(cookie_dict),
-            "x-t": str(xhshow_client.get_x_t(ts)),
-            "x-b3-traceid": xhshow_client.get_b3_trace_id(),
-        }
+            payload_array = xhshow_client.crypto_processor.build_payload_array(
+                d_value, a1_value, "xhs-pc-web", content_string, ts
+            )
+            xor_result = xhshow_client.crypto_processor.bit_ops.xor_transform_array(payload_array)
+            config = xhshow_client.config
+            x3_b64 = xhshow_client.crypto_processor.b64encoder.encode_x3(
+                xor_result[:config.PAYLOAD_LENGTH]
+            )
+            sig_data = config.SIGNATURE_DATA_TEMPLATE.copy()
+            sig_data["x3"] = config.X3_PREFIX + x3_b64
+            x_s = config.XYS_PREFIX + xhshow_client.crypto_processor.b64encoder.encode(
+                json.dumps(sig_data, separators=(",", ":"), ensure_ascii=False)
+            )
+            headers = {
+                "x-s": x_s,
+                "x-s-common": xhshow_client.sign_xs_common(cookie_dict),
+                "x-t": str(xhshow_client.get_x_t(ts)),
+                "x-b3-traceid": xhshow_client.get_b3_trace_id(),
+            }
 
     return {
         "x-s": headers.get("x-s", ""),

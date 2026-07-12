@@ -60,8 +60,16 @@ def get_web_id():
 
 async def get_a_bogus(url: str, params: str, post_data: dict, user_agent: str, page: Page = None):
     """
-    Get a_bogus parameter, currently does not support POST request type signature
+    Get a_bogus parameter, currently does not support POST request type signature.
+    启用签名服务 (config.ENABLE_SIGN_SERVICE=True) 时走 SignSrv,否则本地 execjs。
     """
+    try:
+        import config as _cfg
+        if getattr(_cfg, "ENABLE_SIGN_SERVICE", False):
+            from sign_client import get_client
+            return await get_client().sign_douyin(url, params, user_agent)
+    except Exception:
+        pass
     return get_a_bogus_from_js(url, params, user_agent)
 
 def get_a_bogus_from_js(url: str, params: str, user_agent: str):

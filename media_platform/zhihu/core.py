@@ -56,6 +56,7 @@ class ZhihuCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self) -> None:
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.zhihu.com"
         self.cookie_urls = [self.index_url]
         # self.user_agent = utils.get_user_agent()
@@ -79,6 +80,22 @@ class ZhihuCrawler(AbstractCrawler):
             playwright_proxy_format, httpx_proxy_format = utils.format_proxy_info(
                 ip_proxy_info
             )
+
+        # 脱浏览器模式:已有 cookie 时跳过浏览器(zhihu 签名为 execjs 纯算法)
+        cookie_str = getattr(self, "_account_info", None)
+        cookie_str = cookie_str.cookies if cookie_str is not None else config.COOKIES
+        if getattr(config, "ENABLE_HEADLESS_API", False) and cookie_str:
+            utils.logger.info("[ZhihuCrawler] Headless API mode: skipping browser")
+            self.zhihu_client = await self.create_zhihu_client_headless(httpx_proxy_format, cookie_str)
+            crawler_type_var.set(config.CRAWLER_TYPE)
+            if config.CRAWLER_TYPE == "search":
+                await self.search()
+            elif config.CRAWLER_TYPE == "detail":
+                await self.get_specified_notes()
+            elif config.CRAWLER_TYPE == "creator":
+                await self.get_creators_and_notes()
+            utils.logger.info("[ZhihuCrawler.start] Zhihu Crawler finished (headless)")
+            return
 
         async with async_playwright() as playwright:
             # Choose launch mode based on configuration
@@ -154,12 +171,15 @@ class ZhihuCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < zhihu_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = zhihu_limit_count
         start_page = config.START_PAGE
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(
                 f"[ZhihuCrawler.search] Current search keyword: {keyword}"
             )
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (
                 page - start_page + 1
             ) * zhihu_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
@@ -184,6 +204,10 @@ class ZhihuCrawler(AbstractCrawler):
                     if not content_list:
                         utils.logger.info("No more content!")
                         break
+
+                    # 断点续爬:记录本页完成(content_id 为内容标识)
+                    content_ids = [getattr(c, "content_id", "") for c in content_list]
+                    await ckpt.save_page(keyword, page, content_ids)
 
                     # Sleep after page navigation
                     await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -258,11 +282,18 @@ class ZhihuCrawler(AbstractCrawler):
         utils.logger.info(
             "[ZhihuCrawler.get_creators_and_notes] Begin get xiaohongshu creators"
         )
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for user_link in config.ZHIHU_CREATOR_URL_LIST:
             utils.logger.info(
                 f"[ZhihuCrawler.get_creators_and_notes] Begin get creator {user_link}"
             )
             user_url_token = user_link.split("/")[-1]
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, user_url_token):
+                utils.logger.info(f"[ZhihuCrawler.get_creators_and_notes] Skip processed creator: {user_url_token}")
+                continue
             # get creator detail info from web html content
             createor_info: ZhihuCreator = await self.zhihu_client.get_creator_info(
                 url_token=user_url_token
@@ -302,6 +333,8 @@ class ZhihuCrawler(AbstractCrawler):
 
             # Get all comments of the creator's contents
             await self.batch_get_content_comments(all_content_list)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_url_token])
 
     async def get_note_detail(
         self, full_note_url: str, semaphore: asyncio.Semaphore
@@ -367,10 +400,19 @@ class ZhihuCrawler(AbstractCrawler):
         Returns:
 
         """
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         get_note_detail_task_list = []
+        processed_urls = []
         for full_note_url in config.ZHIHU_SPECIFIED_ID_LIST:
             # remove query params
             full_note_url = full_note_url.split("?")[0]
+            # 断点续爬:跳过已处理
+            if ckpt.is_processed(scope, full_note_url):
+                utils.logger.info(f"[ZhihuCrawler.get_specified_notes] Skip processed: {full_note_url}")
+                continue
+            processed_urls.append(full_note_url)
             crawler_task = self.get_note_detail(
                 full_note_url=full_note_url,
                 semaphore=asyncio.Semaphore(config.MAX_CONCURRENCY_NUM),
@@ -382,7 +424,7 @@ class ZhihuCrawler(AbstractCrawler):
         for index, note_detail in enumerate(note_details):
             if not note_detail:
                 utils.logger.info(
-                    f"[ZhihuCrawler.get_specified_notes] Note {config.ZHIHU_SPECIFIED_ID_LIST[index]} not found"
+                    f"[ZhihuCrawler.get_specified_notes] Note {processed_urls[index]} not found"
                 )
                 continue
 
@@ -391,6 +433,8 @@ class ZhihuCrawler(AbstractCrawler):
             await zhihu_store.update_zhihu_content(note_detail)
 
         await self.batch_get_content_comments(need_get_comment_notes)
+        # 断点续爬:记录本次处理的 URL
+        await ckpt.save_page(scope, 1, processed_urls)
 
     async def create_zhihu_client(self, httpx_proxy: Optional[str]) -> ZhiHuClient:
         """Create zhihu client"""
@@ -421,6 +465,33 @@ class ZhihuCrawler(AbstractCrawler):
         )
         return zhihu_client_obj
 
+    async def create_zhihu_client_headless(self, httpx_proxy: Optional[str], cookie_str: str) -> ZhiHuClient:
+        """脱浏览器模式:用 cookie 字符串构造 client。zhihu 签名用 execjs,无需 page。"""
+        from tools.crawler_util import convert_str_cookie_to_dict
+        cookie_dict = convert_str_cookie_to_dict(cookie_str)
+        ua = self.user_agent
+        if getattr(self, "_account_info", None) and self._account_info.user_agent:
+            ua = self._account_info.user_agent
+        zhihu_client_obj = ZhiHuClient(
+            proxy=httpx_proxy,
+            headers={
+                "accept": "*/*",
+                "accept-language": "zh-CN,zh;q=0.9",
+                "cookie": cookie_str,
+                "priority": "u=1, i",
+                "referer": "https://www.zhihu.com/search?q=python&time_interval=a_year&type=content",
+                "user-agent": ua,
+                "x-api-version": "3.0.91",
+                "x-app-za": "OS=Web",
+                "x-requested-with": "fetch",
+                "x-zse-93": "101_3_3.0",
+            },
+            playwright_page=None,
+            cookie_dict=cookie_dict,
+            proxy_ip_pool=self.ip_proxy_pool,
+        )
+        return zhihu_client_obj
+
     async def launch_browser(
         self,
         chromium: BrowserType,
@@ -435,9 +506,11 @@ class ZhihuCrawler(AbstractCrawler):
         if config.SAVE_LOGIN_STATE:
             # feat issue #14
             # we will save login state to avoid login every time
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
             user_data_dir = os.path.join(
-                os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM
-            )  # type: ignore
+                os.getcwd(), "browser_data", dir_name
+            )
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -472,6 +545,7 @@ class ZhihuCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

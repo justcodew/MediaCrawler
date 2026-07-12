@@ -58,6 +58,7 @@ class WeiboCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self):
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.weibo.com"
         self.mobile_index_url = "https://m.weibo.cn"
         self.cookie_urls = [self.mobile_index_url]
@@ -158,10 +159,13 @@ class WeiboCrawler(AbstractCrawler):
             utils.logger.error(f"[WeiboCrawler.search] Invalid WEIBO_SEARCH_TYPE: {config.WEIBO_SEARCH_TYPE}")
             return
 
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[WeiboCrawler.search] Current search keyword: {keyword}")
-            page = 1
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
+            page = scope_state.last_page + 1 if scope_state.last_page > 0 else 1
             while (page - start_page + 1) * weibo_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 if page < start_page:
                     utils.logger.info(f"[WeiboCrawler.search] Skip page: {page}")
@@ -182,6 +186,8 @@ class WeiboCrawler(AbstractCrawler):
                             await self.get_note_images(mblog)
 
                 page += 1
+                # 断点续爬:记录本页完成
+                await ckpt.save_page(keyword, page - 1, note_id_list)
 
                 # Sleep after page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -194,13 +200,25 @@ class WeiboCrawler(AbstractCrawler):
         get specified notes info
         :return:
         """
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
+        # 断点续爬:过滤已处理
+        todo_ids = [nid for nid in config.WEIBO_SPECIFIED_ID_LIST if not ckpt.is_processed(scope, nid)]
+        skipped = len(config.WEIBO_SPECIFIED_ID_LIST) - len(todo_ids)
+        if skipped:
+            utils.logger.info(f"[WeiboCrawler.get_specified_notes] Skip {skipped} processed notes")
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
-        task_list = [self.get_note_info_task(note_id=note_id, semaphore=semaphore) for note_id in config.WEIBO_SPECIFIED_ID_LIST]
+        task_list = [self.get_note_info_task(note_id=note_id, semaphore=semaphore) for note_id in todo_ids]
         video_details = await asyncio.gather(*task_list)
+        done_ids = []
         for note_item in video_details:
             if note_item:
                 await weibo_store.update_weibo_note(note_item)
-        await self.batch_get_notes_comments(config.WEIBO_SPECIFIED_ID_LIST)
+                done_ids.append(note_item.get("id", ""))
+        await self.batch_get_notes_comments(todo_ids)
+        # 断点续爬:记录本次处理的 note_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_note_info_task(self, note_id: str, semaphore: asyncio.Semaphore) -> Optional[Dict]:
         """
@@ -307,7 +325,14 @@ class WeiboCrawler(AbstractCrawler):
 
         """
         utils.logger.info("[WeiboCrawler.get_creators_and_notes] Begin get weibo creators")
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for user_id in config.WEIBO_CREATOR_ID_LIST:
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, str(user_id)):
+                utils.logger.info(f"[WeiboCrawler.get_creators_and_notes] Skip processed creator: {user_id}")
+                continue
             createor_info_res: Dict = await self.wb_client.get_creator_info_by_id(creator_id=user_id)
             if createor_info_res:
                 createor_info: Dict = createor_info_res.get("userInfo", {})
@@ -332,6 +357,8 @@ class WeiboCrawler(AbstractCrawler):
 
                 note_ids = [note_item.get("mblog", {}).get("id") for note_item in all_notes_list if note_item.get("mblog", {}).get("id")]
                 await self.batch_get_notes_comments(note_ids)
+                # 断点续爬:记录该 creator 已处理
+                await ckpt.save_page(scope, 1, [str(user_id)])
 
             else:
                 utils.logger.error(f"[WeiboCrawler.get_creators_and_notes] get creator info error, creator_id:{user_id}")
@@ -368,7 +395,9 @@ class WeiboCrawler(AbstractCrawler):
         """Launch browser and create browser context"""
         utils.logger.info("[WeiboCrawler.launch_browser] Begin create browser context ...")
         if config.SAVE_LOGIN_STATE:
-            user_data_dir = os.path.join(os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM)  # type: ignore
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
+            user_data_dir = os.path.join(os.getcwd(), "browser_data", dir_name)
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -404,6 +433,7 @@ class WeiboCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Display browser information

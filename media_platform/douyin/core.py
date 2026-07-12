@@ -53,6 +53,7 @@ class DouYinCrawler(AbstractCrawler):
     cdp_manager: Optional[CDPBrowserManager]
 
     def __init__(self) -> None:
+        super().__init__()  # 初始化 checkpoint_manager 等基类属性
         self.index_url = "https://www.douyin.com"
         self.cookie_urls = [
             "https://douyin.com",
@@ -130,12 +131,15 @@ class DouYinCrawler(AbstractCrawler):
         if config.CRAWLER_MAX_NOTES_COUNT < dy_limit_count:
             config.CRAWLER_MAX_NOTES_COUNT = dy_limit_count
         start_page = config.START_PAGE  # start page number
+        ckpt = self.checkpoint_manager
         for keyword in config.KEYWORDS.split(","):
             source_keyword_var.set(keyword)
             utils.logger.info(f"[DouYinCrawler.search] Current keyword: {keyword}")
+            # 断点续爬:恢复进度
+            scope_state = await ckpt.begin_scope(keyword)
             aweme_list: List[str] = []
-            page = 0
-            dy_search_id = ""
+            page = scope_state.last_page if scope_state.last_page > 0 else 0
+            dy_search_id = scope_state.search_id
             while (page - start_page + 1) * dy_limit_count <= config.CRAWLER_MAX_NOTES_COUNT:
                 if page < start_page:
                     utils.logger.info(f"[DouYinCrawler.search] Skip {page}")
@@ -171,9 +175,11 @@ class DouYinCrawler(AbstractCrawler):
                     page_aweme_list.append(aweme_info.get("aweme_id", ""))
                     await douyin_store.update_douyin_aweme(aweme_item=aweme_info)
                     await self.get_aweme_media(aweme_item=aweme_info)
-                
+
                 # Batch get note comments for the current page
                 await self.batch_get_note_comments(page_aweme_list)
+                # 断点续爬:记录本页完成
+                await ckpt.save_page(keyword, page, page_aweme_list, search_id=dy_search_id)
 
                 # Sleep after each page navigation
                 await asyncio.sleep(config.CRAWLER_MAX_SLEEP_SEC)
@@ -183,6 +189,9 @@ class DouYinCrawler(AbstractCrawler):
     async def get_specified_awemes(self):
         """Get the information and comments of the specified post from URLs or IDs"""
         utils.logger.info("[DouYinCrawler.get_specified_awemes] Parsing video URLs...")
+        ckpt = self.checkpoint_manager
+        scope = "__detail__"
+        await ckpt.begin_scope(scope)
         aweme_id_list = []
         for video_url in config.DY_SPECIFIED_ID_LIST:
             try:
@@ -200,6 +209,10 @@ class DouYinCrawler(AbstractCrawler):
                         utils.logger.error(f"[DouYinCrawler.get_specified_awemes] Failed to resolve short link: {video_url}")
                         continue
 
+                # 断点续爬:跳过已处理的 aweme_id
+                if ckpt.is_processed(scope, video_info.aweme_id):
+                    utils.logger.info(f"[DouYinCrawler.get_specified_awemes] Skip processed: {video_info.aweme_id}")
+                    continue
                 aweme_id_list.append(video_info.aweme_id)
                 utils.logger.info(f"[DouYinCrawler.get_specified_awemes] Parsed aweme ID: {video_info.aweme_id} from {video_url}")
             except ValueError as e:
@@ -209,11 +222,15 @@ class DouYinCrawler(AbstractCrawler):
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENCY_NUM)
         task_list = [self.get_aweme_detail(aweme_id=aweme_id, semaphore=semaphore) for aweme_id in aweme_id_list]
         aweme_details = await asyncio.gather(*task_list)
+        done_ids = []
         for aweme_detail in aweme_details:
             if aweme_detail is not None:
                 await douyin_store.update_douyin_aweme(aweme_item=aweme_detail)
                 await self.get_aweme_media(aweme_item=aweme_detail)
+                done_ids.append(aweme_detail.get("aweme_id", ""))
         await self.batch_get_note_comments(aweme_id_list)
+        # 断点续爬:记录本次处理的 aweme_id
+        await ckpt.save_page(scope, 1, done_ids)
 
     async def get_aweme_detail(self, aweme_id: str, semaphore: asyncio.Semaphore) -> Any:
         """Get note detail"""
@@ -274,6 +291,9 @@ class DouYinCrawler(AbstractCrawler):
         utils.logger.info("[DouYinCrawler.get_creators_and_videos] Begin get douyin creators")
         utils.logger.info("[DouYinCrawler.get_creators_and_videos] Parsing creator URLs...")
 
+        ckpt = self.checkpoint_manager
+        scope = "__creator__"
+        await ckpt.begin_scope(scope)
         for creator_url in config.DY_CREATOR_ID_LIST:
             try:
                 creator_info_parsed = parse_creator_info_from_url(creator_url)
@@ -281,6 +301,11 @@ class DouYinCrawler(AbstractCrawler):
                 utils.logger.info(f"[DouYinCrawler.get_creators_and_videos] Parsed sec_user_id: {user_id} from {creator_url}")
             except ValueError as e:
                 utils.logger.error(f"[DouYinCrawler.get_creators_and_videos] Failed to parse creator URL: {e}")
+                continue
+
+            # 断点续爬:跳过已处理的 creator
+            if ckpt.is_processed(scope, user_id):
+                utils.logger.info(f"[DouYinCrawler.get_creators_and_videos] Skip processed creator: {user_id}")
                 continue
 
             creator_info: Dict = await self.dy_client.get_user_info(user_id)
@@ -292,6 +317,8 @@ class DouYinCrawler(AbstractCrawler):
 
             video_ids = [video_item.get("aweme_id") for video_item in all_video_list]
             await self.batch_get_note_comments(video_ids)
+            # 断点续爬:记录该 creator 已处理
+            await ckpt.save_page(scope, 1, [user_id])
 
     async def fetch_creator_video_detail(self, video_list: List[Dict]):
         """
@@ -337,7 +364,9 @@ class DouYinCrawler(AbstractCrawler):
     ) -> BrowserContext:
         """Launch browser and create browser context"""
         if config.SAVE_LOGIN_STATE:
-            user_data_dir = os.path.join(os.getcwd(), "browser_data", config.USER_DATA_DIR % config.PLATFORM)  # type: ignore
+            from tools.crawler_util import resolve_user_data_dir_name
+            dir_name = resolve_user_data_dir_name(config.PLATFORM, getattr(self, "_account_info", None))
+            user_data_dir = os.path.join(os.getcwd(), "browser_data", dir_name)
             browser_context = await chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 accept_downloads=True,
@@ -372,6 +401,7 @@ class DouYinCrawler(AbstractCrawler):
                 playwright_proxy=playwright_proxy,
                 user_agent=user_agent,
                 headless=headless,
+                account=getattr(self, "_account_info", None),
             )
 
             # Add anti-detection script

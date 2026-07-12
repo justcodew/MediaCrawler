@@ -1,0 +1,30 @@
+{
+  "view": {
+    "crawler": "🕷️ 爬虫控制台",
+    "analysis": "🤖 内容分析"
+  },
+  "panel": {
+    "title": "🤖 内容分析 Agent",
+    "refreshPlatforms": "刷新平台"
+  },
+  "field": {
+    "platform": "平台",
+    "noteId": "指定 note_id(可选)",
+    "noteIdPlaceholder": "留空则批量分析",
+    "limit": "批量条数"
+  },
+  "action": {
+    "start": "开始拆解",
+    "starting": "分析中..."
+  },
+  "result": {
+    "empty": "选择平台并点击「开始拆解」,生成爆款元素分析报告",
+    "reportLabel": "🤖 拆解报告"
+  },
+  "toast": {
+    "loadPlatformsFailed": "加载平台失败",
+    "notConfigured": "LLM 未配置,请在 .env 设置 LLM_API_KEY",
+    "analyzeFailed": "分析失败",
+    "done": "分析完成,共 {{count}} 条"
+  }
+}

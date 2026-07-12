@@ -33,6 +33,7 @@ class PlatformEnum(str, Enum):
     WEIBO = "wb"
     TIEBA = "tieba"
     ZHIHU = "zhihu"
+    DOUBAN = "douban"
 
 
 class LoginTypeEnum(str, Enum):
@@ -76,6 +77,13 @@ class CrawlerStartRequest(BaseModel):
     headless: bool = False
     max_notes_count: Optional[int] = Field(default=None, ge=1, le=MAX_API_LIMIT_COUNT)
     max_comments_count: Optional[int] = Field(default=None, ge=1, le=MAX_API_LIMIT_COUNT)
+    # Pro 功能开关(MediaCrawler 社区增强版)
+    enable_sign_service: bool = False
+    enable_resume: bool = False
+    resume_task_id: str = ""
+    enable_account_pool: bool = False
+    accounts_file: str = ""
+    enable_headless_api: bool = False
 
 
 class CrawlerStatusResponse(BaseModel):

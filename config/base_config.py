@@ -140,6 +140,73 @@ CRAWLER_MAX_SLEEP_SEC = 2
 # 警告：禁用 SSL 验证将使所有流量暴露于中间人攻击风险，请勿在生产环境中开启。
 DISABLE_SSL_VERIFY = False
 
+# ==================== 签名服务 (SignSrv) 配置 ====================
+# 将各平台签名算法(execjs + JS / 纯 Python)解耦为独立 HTTP 微服务 (sign_service/app.py)，
+# crawler 主进程无需安装 Node 运行时即可签名。
+#
+# 启用步骤:
+#   1. 启动签名服务: uv run uvicorn sign_service.app:app --port 8888
+#   2. 将 ENABLE_SIGN_SERVICE 设为 True
+# 若服务未启动或不可达,会自动 fallback 到各平台原有的本地签名函数,功能不中断。
+ENABLE_SIGN_SERVICE = False
+SIGN_SERVICE_URL = "http://127.0.0.1:8888"
+
+# ==================== 断点续爬 (Resume) 配置 ====================
+# 启用后,爬虫会把进度(已抓到第几页、search_id、已处理 note_id)持久化到
+# database/checkpoints.db(独立 sqlite,不依赖 SAVE_DATA_OPTION)。
+# 中断后可用 --resume <task_id> 从断点继续,避免重复抓取。
+# 首次运行会生成 task_id 并打印,便于后续续爬。
+ENABLE_RESUME = False
+RESUME_TASK_ID = ""  # 续爬时填入上次任务的 task_id
+
+# ==================== 多账号 (Account Pool) 配置 ====================
+# 启用后,crawler 会从账号池(database/accounts.db)轮转使用多个账号,
+# 每账号独立 user_data_dir 与可选代理,失败自动切换。详见 account/README.md
+ENABLE_ACCOUNT_POOL = False
+ACCOUNT_POOL_FAIL_THRESHOLD = 3   # 连续失败次数达此值,账号进入冷却
+ACCOUNT_CONCURRENCY = 1           # 同时使用几个账号(1=串行轮转,>1=并发)
+ACCOUNTS_IMPORT_FILE = ""         # 启动时从该 CSV/Excel 导入账号(可选)
+
+# ==================== 脱浏览器模式 (Headless API) 配置 ====================
+# 当前生效平台:xhs / zhihu(签名均为纯算法,无需 page.evaluate)。
+# 开启后,若已有 cookie(来自 config.COOKIES 或账号池),这些平台会跳过浏览器启动,
+# 直接用 httpx + 签名服务完成请求,大幅降低资源占用(无 playwright/CDP)。
+# 无 cookie 时仍走 CDP 登录拿 cookie。
+# 注:bilibili(需浏览器 localStorage 的 wbi keys)、tieba(PC API 经 page.evaluate fetch)、
+# 抖音/微博/快手 仍需浏览器,不适用本模式。
+ENABLE_HEADLESS_API = False
+
+# ==================== 反检测 (Anti-Detect) 配置 ====================
+# 降低被平台识别为机器人的风险。详见 anti_detect/README.md
+# 重要:这些措施只能降低风险,不能保证零风险。请用小号 + 控制规模 + 遵守平台规则。
+# 是否启用反检测(总开关)。关闭后下面所有子项失效,crawler 恢复原行为。
+ENABLE_ANTI_DETECT = False
+# 行为拟人化:固定 sleep 改为 sleep(base + random(0, jitter))
+HUMANIZE_SLEEP_JITTER = 3      # 随机抖动秒数(加在 CRAWLER_MAX_SLEEP_SEC 上)
+HUMANIZE_PAGE_STAY_SEC = 3     # 进入页面后停留秒数(模拟阅读)
+HUMANIZE_SCROLL_TIMES = 3      # 页面滚动次数(模拟浏览)
+# 截图风控感知:每页请求后截图 → OCR/LLM 识别风控页面
+ANTI_DETECT_SCREENSHOT = True  # 是否截图做风控判定
+ANTI_DETECT_SCREENSHOT_DIR = "data/risk_screenshots"  # 截图保存目录
+# OCR 通道(优先):用 RapidOCR(ppocr)提取截图文字 → 关键词判定。纯本地零成本。
+# 安装: pip install rapidocr-onnxruntime (或 uv add rapidocr-onnxruntime)
+# 未安装时自动 fallback 到 LLM 截图多模态识别。
+ANTI_DETECT_USE_OCR = True
+# 风控响应:检测到风控时的处理策略(stop=停止 | backoff=退避重试)
+ANTI_DETECT_ON_RISK = "stop"
+# 智能退避:连续风控时的退避参数
+ANTI_DETECT_BACKOFF_BASE = 60    # 首次退避秒数
+ANTI_DETECT_BACKOFF_MAX = 1800   # 最大退避秒数(30分钟)
+ANTI_DETECT_RISK_LIMIT = 3       # 连续风控达此数 → 停止该账号
+# 滑块自动通过:复用 tools/slider_util.py 的 opencv 识别
+ANTI_DETECT_AUTO_SLIDER = False  # 是否自动尝试过滑块(成功率有限,谨慎开启)
+
+# ==================== 好房雷达(house_pro)对接配置 ====================
+# MediaCrawler 采集后,额外把结构化 Listing 数据写到 house_pro 期望的目录,
+# house_pro 的 Celery 定时扫该目录做 ETL 入库。
+# 设为空字符串则不启用文件落盘(只用 HTTP API 对接)。
+HOUSE_RAW_DIR = ""  # 如 "../house_pro/data/xhs_raw"
+
 from .bilibili_config import *
 from .xhs_config import *
 from .dy_config import *
@@ -147,3 +214,4 @@ from .ks_config import *
 from .weibo_config import *
 from .tieba_config import *
 from .zhihu_config import *
+from .douban_config import *

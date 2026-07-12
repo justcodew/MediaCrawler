@@ -47,6 +47,7 @@ class PlatformEnum(str, Enum):
     WEIBO = "wb"
     TIEBA = "tieba"
     ZHIHU = "zhihu"
+    DOUBAN = "douban"
 
 
 class LoginTypeEnum(str, Enum):
@@ -332,6 +333,67 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 rich_help_panel="Proxy Configuration",
             ),
         ] = config.STATIC_PROXY_URL,
+        enable_sign_service: Annotated[
+            str,
+            typer.Option(
+                "--enable_sign_service",
+                help="Whether to enable SignSrv, supports yes/true/t/y/1 or no/false/f/n/0",
+                rich_help_panel="Advanced Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_SIGN_SERVICE", False)),
+        enable_resume: Annotated[
+            str,
+            typer.Option(
+                "--enable_resume",
+                help="Enable checkpoint resume (yes/no). First run prints a task_id for later --resume.",
+                rich_help_panel="Advanced Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_RESUME", False)),
+        resume: Annotated[
+            str,
+            typer.Option(
+                "--resume",
+                help="Resume from a previous task_id (implies --enable_resume yes)",
+                rich_help_panel="Advanced Configuration",
+            ),
+        ] = "",
+        enable_account_pool: Annotated[
+            str,
+            typer.Option(
+                "--enable_account_pool",
+                help="Enable multi-account rotation from account pool (yes/no)",
+                rich_help_panel="Account Pool Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_ACCOUNT_POOL", False)),
+        accounts_file: Annotated[
+            str,
+            typer.Option(
+                "--accounts_file",
+                help="Import accounts from this CSV/Excel file before starting",
+                rich_help_panel="Account Pool Configuration",
+            ),
+        ] = getattr(config, "ACCOUNTS_IMPORT_FILE", ""),
+        enable_headless_api: Annotated[
+            str,
+            typer.Option(
+                "--enable_headless_api",
+                help="Headless API mode for xhs/zhihu (skip browser when cookie exists)",
+                rich_help_panel="Advanced Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_HEADLESS_API", False)),
+        enable_anti_detect: Annotated[
+            str,
+            typer.Option(
+                "--enable_anti_detect",
+                help="Enable anti-detect (screenshot risk sensing + humanized behavior)",
+                rich_help_panel="Advanced Configuration",
+                show_default=True,
+            ),
+        ] = str(getattr(config, "ENABLE_ANTI_DETECT", False)),
     ) -> SimpleNamespace:
         """MediaCrawler 命令行入口"""
 
@@ -339,6 +401,11 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         enable_sub_comment = _to_bool(get_sub_comment)
         enable_headless = _to_bool(headless)
         enable_ip_proxy_value = _to_bool(enable_ip_proxy)
+        enable_sign_service_value = _to_bool(enable_sign_service)
+        enable_resume_value = _to_bool(enable_resume) or bool(resume)
+        enable_account_pool_value = _to_bool(enable_account_pool) or bool(accounts_file)
+        enable_headless_api_value = _to_bool(enable_headless_api)
+        enable_anti_detect_value = _to_bool(enable_anti_detect)
         init_db_value = init_db.value if init_db else None
 
         # Parse specified_id and creator_id into lists
@@ -365,6 +432,14 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
         config.IP_PROXY_POOL_COUNT = ip_proxy_pool_count
         config.IP_PROXY_PROVIDER_NAME = ip_proxy_provider_name
         config.STATIC_PROXY_URL = static_proxy_url
+        # Advanced Configuration
+        config.ENABLE_SIGN_SERVICE = enable_sign_service_value
+        config.ENABLE_RESUME = enable_resume_value
+        config.RESUME_TASK_ID = resume
+        config.ENABLE_ACCOUNT_POOL = enable_account_pool_value
+        config.ACCOUNTS_IMPORT_FILE = accounts_file
+        config.ENABLE_HEADLESS_API = enable_headless_api_value
+        config.ENABLE_ANTI_DETECT = enable_anti_detect_value
 
         # Set platform-specific ID lists for detail/creator mode
         if specified_id_list:
@@ -384,6 +459,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 ]
             elif platform == PlatformEnum.ZHIHU:
                 config.ZHIHU_SPECIFIED_ID_LIST = specified_id_list
+            elif platform == PlatformEnum.DOUBAN:
+                config.DOUBAN_SPECIFIED_ID_LIST = specified_id_list
 
         if creator_id_list:
             if platform == PlatformEnum.XHS:
@@ -400,6 +477,8 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
                 config.TIEBA_CREATOR_URL_LIST = [
                     _normalize_tieba_creator_url(item) for item in creator_id_list
                 ]
+            elif platform == PlatformEnum.DOUBAN:
+                config.DOUBAN_GROUP_ID_LIST = creator_id_list
 
         return SimpleNamespace(
             platform=config.PLATFORM,
@@ -415,6 +494,13 @@ async def parse_cmd(argv: Optional[Sequence[str]] = None):
             cookies=config.COOKIES,
             specified_id=specified_id,
             creator_id=creator_id,
+            enable_sign_service=config.ENABLE_SIGN_SERVICE,
+            enable_resume=config.ENABLE_RESUME,
+            resume=config.RESUME_TASK_ID,
+            enable_account_pool=config.ENABLE_ACCOUNT_POOL,
+            accounts_file=config.ACCOUNTS_IMPORT_FILE,
+            enable_headless_api=config.ENABLE_HEADLESS_API,
+            enable_anti_detect=config.ENABLE_ANTI_DETECT,
         )
 
     command = typer.main.get_command(app)

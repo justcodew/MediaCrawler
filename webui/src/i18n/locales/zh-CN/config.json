@@ -15,6 +15,10 @@
     "runtime": {
       "title": "运行参数",
       "description": "运行时参数"
+    },
+    "proConfig": {
+      "title": "Pro 功能",
+      "description": "社区增强版功能(默认关闭)"
     }
   },
   "field": {
@@ -56,7 +60,17 @@
     "commentExtraction": "评论抓取",
     "subComments": "子评论",
     "headlessMode": "无头模式",
-    "headlessModeHint": "无 GUI 运行浏览器"
+    "headlessModeHint": "无 GUI 运行浏览器",
+    "signService": "签名服务",
+    "signServiceHint": "通过独立签名服务签名,降低 Node 依赖",
+    "resume": "断点续爬",
+    "resumeHint": "中断后可从上次进度继续",
+    "headlessApi": "脱浏览器模式",
+    "headlessApiHint": "xhs/zhihu 有 cookie 时跳过浏览器",
+    "accountPool": "多账号池",
+    "accountPoolHint": "从账号池轮转使用多账号",
+    "accountsFile": "账号文件",
+    "accountsFilePlaceholder": "accounts.csv 路径(可选)"
   },
   "button": {
     "initiateScan": "开始爬虫",

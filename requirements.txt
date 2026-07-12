@@ -29,3 +29,10 @@ openpyxl>=3.1.2
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 xhshow>=0.1.9
+# 可选:AI 内容分析 Agent 的 LangGraph 编排(未安装时自动 fallback 纯 async)
+# 安装: pip install langgraph 或 uv sync --extra agent
+langgraph>=0.2.0
+# 可选:反检测 OCR 通道(RapidOCR/ppocr,中文识别效果好)
+# 安装: pip install rapidocr-onnxruntime 或 uv sync --extra anti-detect
+# 未安装时自动 fallback 到 LLM 截图多模态识别
+rapidocr-onnxruntime>=1.3.0

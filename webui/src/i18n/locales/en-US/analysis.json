@@ -1,0 +1,30 @@
+{
+  "view": {
+    "crawler": "🕷️ Crawler Console",
+    "analysis": "🤖 Content Analysis"
+  },
+  "panel": {
+    "title": "🤖 Content Analysis Agent",
+    "refreshPlatforms": "Refresh platforms"
+  },
+  "field": {
+    "platform": "Platform",
+    "noteId": "Specific note_id (optional)",
+    "noteIdPlaceholder": "Leave empty for batch",
+    "limit": "Batch size"
+  },
+  "action": {
+    "start": "Start analysis",
+    "starting": "Analyzing..."
+  },
+  "result": {
+    "empty": "Select a platform and click \"Start analysis\" to generate a viral-element report",
+    "reportLabel": "🤖 Analysis Report"
+  },
+  "toast": {
+    "loadPlatformsFailed": "Failed to load platforms",
+    "notConfigured": "LLM not configured. Set LLM_API_KEY in .env",
+    "analyzeFailed": "Analysis failed",
+    "done": "Analysis done, {{count}} item(s)"
+  }
+}
