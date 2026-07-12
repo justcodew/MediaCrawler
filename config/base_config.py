@@ -201,6 +201,12 @@ ANTI_DETECT_RISK_LIMIT = 3       # 连续风控达此数 → 停止该账号
 # 滑块自动通过:复用 tools/slider_util.py 的 opencv 识别
 ANTI_DETECT_AUTO_SLIDER = False  # 是否自动尝试过滑块(成功率有限,谨慎开启)
 
+# ==================== 好房雷达(house_pro)对接配置 ====================
+# MediaCrawler 采集后,额外把结构化 Listing 数据写到 house_pro 期望的目录,
+# house_pro 的 Celery 定时扫该目录做 ETL 入库。
+# 设为空字符串则不启用文件落盘(只用 HTTP API 对接)。
+HOUSE_RAW_DIR = ""  # 如 "../house_pro/data/xhs_raw"
+
 from .bilibili_config import *
 from .xhs_config import *
 from .dy_config import *
